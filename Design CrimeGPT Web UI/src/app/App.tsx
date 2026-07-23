@@ -1,24 +1,51 @@
-import { useState, useRef, useEffect, createContext, useContext } from "react";
+import React, { useState, useRef, useEffect, createContext, useContext, Component } from "react";
+import { useTranslation } from 'react-i18next';
 import { createPortal } from "react-dom";
 import axios from "axios";
+import { jsonrepair } from "jsonrepair";
 import { ImageWithFallback } from "@/app/components/figma/ImageWithFallback";
 import gujaratPoliceLogo from "@/imports/images.png";
 import html2pdf from "html2pdf.js";
 import {
-  Shield, Search, FileText, BarChart2, Settings, Bell, Send, Paperclip,
+  Shield, Search, FileText, BarChart2, Settings, Send, Paperclip,
   AlertTriangle, CheckCircle, Clock, Eye, Database, Zap, Menu, X,
   TrendingUp, Users, Lock, ChevronRight, ChevronDown, MapPin, Calendar,
   Plus, Download, Fingerprint, Radio, Layers, BookOpen, Cpu, LogOut,
   UserCircle, Key, Activity, Building2, BadgeCheck, Network, Scale,
   FlaskConical, ClipboardList, ScrollText, UserCog, Briefcase, ShieldCheck,
   LayoutDashboard, ScanLine, FileSearch, EyeOff, ChevronLeft, Star,
-  Printer, UploadCloud, CheckCircle2, ShieldAlert, DownloadCloud, Loader2
+  Printer, UploadCloud, CheckCircle2, ShieldAlert, DownloadCloud, Loader2, Sun, Moon, Trash, Trash2, List, LayoutGrid
 } from "lucide-react";
+import { Toaster, toast } from "sonner";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Cell
 } from "recharts";
 import { supabase } from "@/lib/supabaseClient";
+import { translations } from "@/utils/translations";
+import FloatingChatbot from "@/components/FloatingChatbot";
+import { FIRModal } from "@/components/FIRModal";
+import { Sec94Modal } from "@/components/Sec94Modal";
+import { Sec106Modal } from "@/components/Sec106Modal";
+import { SeizureMemoModal } from "@/components/SeizureMemoModal";
+import { ArrestMemoModal } from "@/components/ArrestMemoModal";
+import { RemandApplicationModal } from "@/components/RemandApplicationModal";
+import { ChargesheetModal } from "@/components/ChargesheetModal";
+import { BailOppositionModal } from "@/components/BailOppositionModal";
+import { SearchWarrantModal } from "@/components/SearchWarrantModal";
+import { EvidenceTaggingModal } from "@/components/EvidenceTaggingModal";
+import { RolesManagementView } from "@/app/components/RolesManagementView";
+import { UserManagement } from "@/components/UserManagement";
+import { SystemSettings } from "@/components/Settings";
+import { Logbook } from "@/components/Logbook";
+import { AIInvestigation } from "@/components/AIInvestigation";
+import { logActivity } from "@/utils/logger";
+
+export const LanguageContext = createContext<{
+  language: string;
+  setLanguage: (lang: string) => void;
+  t: Record<string, string>;
+}>({ language: 'en', setLanguage: () => {}, t: translations.en });
 
 // ─── Keyframes ────────────────────────────────────────────────────────────────
 
@@ -62,8 +89,14 @@ const STYLES = `
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Role = "administrator" | "investigating_officer" | "senior_officer" | "legal_officer" | "forensic_expert";
-type NavId = "dashboard" | "cases" | "evidence" | "investigation" | "legal" | "documents" | "users" | "reports" | "analytics" | "audit" | "settings" | "notifications";
+export type UserRole = 
+  | 'Administrator'
+  | 'Investigating Officer'
+  | 'Senior Officer / Supervisor'
+  | 'Legal Officer'
+  | 'Forensic Expert';
+
+type NavId = "dashboard" | "cases" | "evidence" | "investigation" | "legal" | "documents" | "users" | "reports" | "analytics" | "audit" | "settings" | "logbook";
 type AuthPage = "login" | "register";
 
 interface AuthUser {
@@ -72,26 +105,36 @@ interface AuthUser {
   email: string;
   badgeId: string;
   department: string;
-  role: Role;
+  role: UserRole;
   initials: string;
 }
 
 // ─── RBAC ─────────────────────────────────────────────────────────────────────
 
-const ROLE_LABELS: Record<Role, string> = {
-  administrator: "Administrator",
-  investigating_officer: "Investigating Officer",
-  senior_officer: "Senior Officer / Supervisor",
-  legal_officer: "Legal Officer",
-  forensic_expert: "Forensic Expert",
+export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
+  'Administrator': [
+    'dashboard', 'cases', 'evidence', 'investigation', 'documents', 'settings', 'users', 'logbook'
+  ],
+  'Senior Officer / Supervisor': [
+    'dashboard', 'cases', 'evidence', 'investigation', 'documents'
+  ],
+  'Investigating Officer': [
+    'dashboard', 'cases', 'evidence', 'investigation', 'documents'
+  ],
+  'Legal Officer': [
+    'dashboard', 'cases', 'evidence', 'documents'
+  ],
+  'Forensic Expert': [
+    'dashboard', 'cases', 'evidence', 'investigation'
+  ]
 };
 
-const ROLE_NAV: Record<Role, NavId[]> = {
-  administrator: ["dashboard", "cases", "evidence", "investigation", "legal", "users", "reports", "audit", "settings"],
-  investigating_officer: ["dashboard", "cases", "evidence", "investigation", "documents", "notifications"],
-  senior_officer: ["dashboard", "cases", "evidence", "reports", "analytics", "legal"],
-  legal_officer: ["legal", "documents", "cases"],
-  forensic_expert: ["evidence", "documents", "reports"],
+export const ROLE_LABELS: Record<string, string> = {
+  'Administrator': 'Administrator',
+  'Senior Officer / Supervisor': 'Senior Officer / Supervisor',
+  'Investigating Officer': 'Investigating Officer',
+  'Legal Officer': 'Legal Officer',
+  'Forensic Expert': 'Forensic Expert'
 };
 
 type NavConfig = { id: NavId; label: string; icon: React.ElementType; badge?: number };
@@ -107,7 +150,7 @@ const ALL_NAV: NavConfig[] = [
   { id: "reports",       label: "Reports",            icon: BarChart2 },
   { id: "analytics",     label: "Analytics",          icon: TrendingUp },
   { id: "audit",         label: "Audit Logs",         icon: FileSearch },
-  { id: "notifications", label: "Notifications",      icon: Bell },
+  { id: "logbook",       label: "Logbook",            icon: BookOpen },
   { id: "settings",      label: "Settings",           icon: Settings },
 ];
 
@@ -117,13 +160,15 @@ type CaseStatus = "critical" | "active" | "pending" | "closed";
 type CasePriority = "high" | "medium" | "low";
 type CaseData = {
   id: string;
+  case_number?: string;
   title: string;
+  location: string;
   status: CaseStatus;
   priority: CasePriority;
   assignee: string;
-  date: string;
-  location: string;
   progress: number;
+  user_id?: string;
+  date: string;
 };
 const CASES_DATA: CaseData[] = [];
 
@@ -148,7 +193,7 @@ const PRIORITY_DATA = [
   { name: "Critical", value: 3, color: "#dc2626" },
   { name: "High",     value: 8, color: "#D4A017" },
   { name: "Medium",   value: 12, color: "#1D4ED8" },
-  { name: "Low",      value: 5, color: "#5E7399" },
+  { name: "Low",      value: 5, color: "var(--muted-foreground)" },
 ];
 
 
@@ -162,9 +207,27 @@ const AuthCtx = createContext<{
 
 function useAuth() { return useContext(AuthCtx); }
 
+const ThemeCtx = createContext<{
+  theme: 'light' | 'dark';
+  toggleTheme: () => void;
+}>({ theme: 'dark', toggleTheme: () => {} });
+
+function useTheme() { return useContext(ThemeCtx); }
+
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
 function cls(...a: (string | false | null | undefined)[]) { return a.filter(Boolean).join(" "); }
+
+const getInitials = (name?: string, email?: string) => {
+  if (name && typeof name === 'string' && name.trim().length > 0) {
+    const parts = name.trim().split(' ');
+    return parts.length > 1 ? `${parts[0][0]}${parts[1][0]}`.toUpperCase() : parts[0].slice(0, 2).toUpperCase();
+  }
+  if (email && typeof email === 'string' && email.includes('@')) {
+    return email.split('@')[0].slice(0, 2).toUpperCase();
+  }
+  return "IO"; // Default fallback: Investigating Officer
+};
 
 // ─── Logo ─────────────────────────────────────────────────────────────────────
 
@@ -184,7 +247,7 @@ function LogoMark({ size = 36, className = "" }: { size?: number; className?: st
 function SecBadge({ icon: Icon, label }: { icon: React.ElementType; label: string }) {
   return (
     <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-mono"
-      style={{ borderColor: "rgba(212,160,23,0.3)", color: "#D4A017", background: "rgba(212,160,23,0.06)" }}>
+      style={{ borderColor: "rgba(212,160,23,0.3)", color: "#D4A017", background: "var(--border)" }}>
       <Icon size={10} />
       {label}
     </div>
@@ -198,7 +261,7 @@ function StatusBadge({ status }: { status: typeof CASES_DATA[0]["status"] }) {
     critical: "bg-red-500/15 text-red-400 border-red-500/30",
     active:   "bg-blue-500/15 text-blue-300 border-blue-500/30",
     pending:  "bg-amber-500/15 text-amber-400 border-amber-500/30",
-    closed:   "bg-slate-500/15 text-slate-400 border-slate-500/30",
+    closed:   "bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30",
   };
   const dot = { critical:"bg-red-400", active:"bg-blue-400", pending:"bg-amber-400", closed:"bg-slate-400" };
   return (
@@ -211,8 +274,8 @@ function StatusBadge({ status }: { status: typeof CASES_DATA[0]["status"] }) {
 // ─── Login Page ───────────────────────────────────────────────────────────────
 
 function LoginPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u: AuthUser) => void }) {
-  const [email, setEmail] = useState("officer@accb.gov.in");
-  const [password, setPassword] = useState("••••••••");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showPw, setShowPw] = useState(false);
@@ -220,19 +283,59 @@ function LoginPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u: A
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      console.error(error);
-      alert(error.message);
+    let targetEmail = email.trim();
+    let badge = "";
+    let name = "";
+
+    try {
+      if (!targetEmail.includes('@')) {
+        const { data: userRecord, error: lookupError } = await supabase
+          .from('users')
+          .select('email, full_name, badge_number')
+          .ilike('badge_number', targetEmail)
+          .maybeSingle();
+
+        if (lookupError || !userRecord || !userRecord.email) {
+          throw new Error("Invalid Badge Number. No active investigator profile found with this ID.");
+        }
+
+        targetEmail = userRecord.email;
+        badge = userRecord.badge_number;
+        name = userRecord.full_name;
+      }
+
+      const { data, error } = await supabase.auth.signInWithPassword({ email: targetEmail, password });
+      if (error) {
+        throw new Error(`Login failed: ${error.message}`);
+      }
+      
+      if (!name) {
+        const { data: userRecord } = await supabase
+          .from('users')
+          .select('full_name, badge_number')
+          .eq('email', targetEmail)
+          .maybeSingle();
+        if (userRecord) {
+           name = userRecord.full_name;
+           badge = userRecord.badge_number;
+        }
+      }
+
+      await logActivity('System Access: Successful Login');
+      toast.success(`Welcome back${name ? `, ${name}` : ''}! ${badge ? `[${badge}]` : ''}`);
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || "An unexpected error occurred during login.");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   return (
-    <div className="size-full flex overflow-hidden" style={{ background: "#060B18" }}>
+    <div className="size-full flex overflow-hidden" style={{ background: "var(--background)" }}>
       {/* Left panel */}
       <div className="hidden lg:flex flex-col justify-between w-[48%] relative overflow-hidden p-12"
-        style={{ background: "#050E22" }}>
+        style={{ background: "var(--sidebar)" }}>
         {/* Animated orbs */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           <div className="absolute w-96 h-96 rounded-full opacity-20"
@@ -250,30 +353,30 @@ function LoginPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u: A
           <div className="flex items-center gap-3 mb-12">
             <LogoMark size={52} />
             <div>
-              <div className="text-xl font-bold text-white font-['Outfit'] tracking-wide">
+              <div className="text-xl font-bold text-slate-900 dark:text-white font-['Outfit'] tracking-wide">
                 Crime<span style={{ color: "#D4A017" }}>GPT</span>
               </div>
-              <div className="text-xs font-mono" style={{ color: "#5E7399" }}>SECURE PLATFORM v2.4</div>
+              <div className="text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>SECURE PLATFORM v2.4</div>
             </div>
           </div>
 
-          <h1 className="text-4xl font-bold text-white leading-tight mb-4 font-['Outfit']">
+          <h1 className="text-4xl font-bold text-slate-900 dark:text-white leading-tight mb-4 font-['Outfit']">
             AI-Powered<br />
             <span style={{ color: "#D4A017" }}>Cyber Crime</span><br />
             Investigation
           </h1>
-          <p className="text-sm leading-relaxed mb-10" style={{ color: "#5E7399" }}>
+          <p className="text-sm leading-relaxed mb-10" style={{ color: "var(--muted-foreground)" }}>
             Ahmedabad Cyber Crime Branch's next-generation intelligence platform.
             Analyze evidence, generate legal documents, and solve cases faster.
           </p>
 
           {/* Illustration */}
           <div className="rounded-2xl p-6 mb-10 border"
-            style={{ background: "rgba(29,78,216,0.08)", borderColor: "rgba(212,160,23,0.15)" }}>
+            style={{ background: "var(--input)", borderColor: "var(--border)" }}>
             <div className="grid grid-cols-3 gap-3 mb-4">
               {["FIR Analysis", "Evidence Chain", "Chargesheet AI"].map((t) => (
                 <div key={t} className="rounded-lg px-3 py-2 text-center text-xs font-mono"
-                  style={{ background: "rgba(29,78,216,0.15)", color: "#93A5C8", border: "1px solid rgba(29,78,216,0.3)" }}>
+                  style={{ background: "var(--input)", color: "var(--secondary-foreground)", border: "1px solid rgba(29,78,216,0.3)" }}>
                   {t}
                 </div>
               ))}
@@ -308,37 +411,34 @@ function LoginPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u: A
           {/* Mobile logo */}
           <div className="flex lg:hidden items-center gap-2 mb-8 justify-center">
             <LogoMark size={40} />
-            <span className="text-xl font-bold text-white font-['Outfit']">
+            <span className="text-xl font-bold text-slate-900 dark:text-white font-['Outfit']">
               Crime<span style={{ color: "#D4A017" }}>GPT</span>
             </span>
           </div>
 
-          <div className="rounded-2xl p-8 border" style={{
-            background: "rgba(11,21,48,0.85)",
-            borderColor: "rgba(212,160,23,0.2)",
-            backdropFilter: "blur(20px)",
-            boxShadow: "0 0 60px rgba(29,78,216,0.15), inset 0 1px 0 rgba(255,255,255,0.04)",
-          }}>
+          <div className="rounded-2xl p-8 border bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(20px)",
+            boxShadow: "0 0 60px rgba(29,78,216,0.15), inset 0 1px 0 rgba(255,255,255,0.04)"}}>
             <div className="mb-7">
-              <h2 className="text-2xl font-bold text-white font-['Outfit'] mb-1">Officer Login</h2>
-              <p className="text-sm" style={{ color: "#5E7399" }}>Access restricted to authorized personnel only</p>
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-white font-['Outfit'] mb-1">Officer Login</h2>
+              <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>Access restricted to authorized personnel only</p>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
-                <label className="block text-xs font-mono mb-1.5 uppercase tracking-wider" style={{ color: "#93A5C8" }}>
-                  Email / Badge ID
+                <label className="block text-xs font-mono mb-1.5 uppercase tracking-wider" style={{ color: "var(--secondary-foreground)" }}>
+                  Email or Badge Number
                 </label>
                 <input value={email} onChange={e => setEmail(e.target.value)}
-                  className="w-full rounded-lg px-4 py-3 text-sm text-white outline-none transition-all font-['DM_Sans']"
-                  style={{ background: "#0F1E3D", border: "1px solid rgba(212,160,23,0.2)", color: "#EEF2FF" }}
+                  type="text"
+                  className="w-full rounded-lg px-4 py-3 text-sm text-slate-900 dark:text-white outline-none transition-all font-['DM_Sans']"
+                  style={{ background: "var(--secondary)", border: "1px solid rgba(212,160,23,0.2)", color: "var(--foreground)" }}
                   onFocus={e => e.target.style.borderColor = "rgba(212,160,23,0.5)"}
-                  onBlur={e => e.target.style.borderColor = "rgba(212,160,23,0.2)"}
-                  placeholder="officer@accb.gov.in" />
+                  onBlur={e => e.target.style.borderColor = "var(--border)"}
+                  placeholder="mitesh@crimegpt.gov or GUJ-CYB-038" />
               </div>
 
               <div>
-                <label className="block text-xs font-mono mb-1.5 uppercase tracking-wider" style={{ color: "#93A5C8" }}>
+                <label className="block text-xs font-mono mb-1.5 uppercase tracking-wider" style={{ color: "var(--secondary-foreground)" }}>
                   Password
                 </label>
                 <div className="relative">
@@ -346,13 +446,13 @@ function LoginPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u: A
                     type={showPw ? "text" : "password"}
                     value={password} onChange={e => setPassword(e.target.value)}
                     className="w-full rounded-lg px-4 py-3 text-sm outline-none pr-10 font-['DM_Sans']"
-                    style={{ background: "#0F1E3D", border: "1px solid rgba(212,160,23,0.2)", color: "#EEF2FF" }}
+                    style={{ background: "var(--secondary)", border: "1px solid rgba(212,160,23,0.2)", color: "var(--foreground)" }}
                     onFocus={e => e.target.style.borderColor = "rgba(212,160,23,0.5)"}
-                    onBlur={e => e.target.style.borderColor = "rgba(212,160,23,0.2)"}
-                    placeholder="Enter your password" />
+                    onBlur={e => e.target.style.borderColor = "var(--border)"}
+                    placeholder="Enter your secure password" />
                   <button type="button" onClick={() => setShowPw(v => !v)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 transition-colors"
-                    style={{ color: "#5E7399" }}>
+                    style={{ color: "var(--muted-foreground)" }}>
                     {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
@@ -368,7 +468,7 @@ function LoginPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u: A
                     }}>
                     {remember && <CheckCircle size={10} className="text-black" />}
                   </div>
-                  <span className="text-xs font-['DM_Sans']" style={{ color: "#93A5C8" }}>Remember me</span>
+                  <span className="text-xs font-['DM_Sans']" style={{ color: "var(--secondary-foreground)" }}>Remember me</span>
                 </label>
                 <button type="button" className="text-xs transition-colors font-['DM_Sans']"
                   style={{ color: "#D4A017" }}
@@ -394,9 +494,8 @@ function LoginPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u: A
                 ) : "Login to CrimeGPT"}
               </button>
             </form>
-
-            <div className="mt-6 pt-5 border-t text-center" style={{ borderColor: "rgba(212,160,23,0.1)" }}>
-              <span className="text-xs" style={{ color: "#5E7399" }}>
+            <div className="mt-6 pt-5 border-t text-center" style={{ borderColor: "var(--border)" }}>
+              <span className="text-xs" style={{ color: "var(--muted-foreground)" }}>
                 New officer?{" "}
                 <button onClick={onSwitch} className="transition-colors font-medium font-['DM_Sans']"
                   style={{ color: "#D4A017" }}>
@@ -431,7 +530,7 @@ function RegisterPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u
       return;
     }
     setLoading(true);
-    const parts = form.name.trim().split(" ");
+    const parts = (form.name || "").trim().split(" ");
     const initials = parts.map(p => p[0]).join("").slice(0, 2).toUpperCase();
     try {
       console.log("Target Supabase endpoint:", import.meta.env.VITE_SUPABASE_URL);
@@ -462,11 +561,11 @@ function RegisterPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u
   }
 
   const fieldStyle = {
-    background: "#0F1E3D", border: "1px solid rgba(212,160,23,0.2)", color: "#EEF2FF",
+    background: "var(--secondary)", border: "1px solid rgba(212,160,23,0.2)", color: "var(--foreground)",
   };
 
   return (
-    <div className="size-full flex items-center justify-center p-6 overflow-y-auto" style={{ background: "#060B18" }}>
+    <div className="size-full flex items-center justify-center p-6 overflow-y-auto" style={{ background: "var(--background)" }}>
       <style>{STYLES}</style>
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute w-96 h-96 rounded-full opacity-10"
@@ -479,17 +578,14 @@ function RegisterPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u
         <div className="flex items-center gap-3 mb-8 justify-center">
           <LogoMark size={44} />
           <div>
-            <div className="text-2xl font-bold text-white font-['Outfit']">Crime<span style={{ color: "#D4A017" }}>GPT</span></div>
-            <div className="text-xs font-mono" style={{ color: "#5E7399" }}>Officer Registration</div>
+            <div className="text-2xl font-bold text-slate-900 dark:text-white font-['Outfit']">Crime<span style={{ color: "#D4A017" }}>GPT</span></div>
+            <div className="text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>Officer Registration</div>
           </div>
         </div>
 
-        <div className="rounded-2xl p-8 border" style={{
-          background: "rgba(11,21,48,0.85)", borderColor: "rgba(212,160,23,0.2)",
-          backdropFilter: "blur(20px)", boxShadow: "0 0 60px rgba(29,78,216,0.12)",
-        }}>
-          <h2 className="text-xl font-bold text-white mb-1 font-['Outfit']">Create Officer Account</h2>
-          <p className="text-xs mb-6 font-mono" style={{ color: "#5E7399" }}>All fields required — account subject to supervisor approval</p>
+        <div className="rounded-2xl p-8 border bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(20px)", boxShadow: "0 0 60px rgba(29,78,216,0.12)"}}>
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-1 font-['Outfit']">Create Officer Account</h2>
+          <p className="text-xs mb-6 font-mono" style={{ color: "var(--muted-foreground)" }}>All fields required — account subject to supervisor approval</p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
@@ -500,30 +596,27 @@ function RegisterPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u
                 { label: "Email", key: "email", placeholder: "officer@accb.gov.in", col: "col-span-2" },
               ].map(({ label, key, placeholder, col }) => (
                 <div key={key} className={col || ""}>
-                  <label className="block text-xs font-mono mb-1.5 uppercase tracking-wider" style={{ color: "#93A5C8" }}>{label}</label>
+                  <label className="block text-xs font-mono mb-1.5 uppercase tracking-wider" style={{ color: "var(--secondary-foreground)" }}>{label}</label>
                   <input value={(form as Record<string, string>)[key]} onChange={set(key)} placeholder={placeholder}
                     className="w-full rounded-lg px-4 py-2.5 text-sm outline-none font-['DM_Sans'] transition-all"
                     style={fieldStyle}
                     onFocus={e => e.target.style.borderColor = "rgba(212,160,23,0.5)"}
-                    onBlur={e => e.target.style.borderColor = "rgba(212,160,23,0.2)"} />
+                    onBlur={e => e.target.style.borderColor = "var(--border)"} />
                 </div>
               ))}
             </div>
 
             {/* Role Selection */}
             <div>
-              <label className="block text-xs font-mono mb-2 uppercase tracking-wider" style={{ color: "#93A5C8" }}>Role</label>
+              <label className="block text-xs font-mono mb-2 uppercase tracking-wider" style={{ color: "var(--secondary-foreground)" }}>Role</label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {(Object.entries(ROLE_LABELS) as [Role, string][]).map(([r, label]) => (
                   <button key={r} type="button" onClick={() => setForm(f => ({ ...f, role: r }))}
-                    className="flex items-center gap-2 px-3 py-2.5 rounded-lg border text-xs text-left transition-all font-['DM_Sans']"
-                    style={{
-                      background: form.role === r ? "rgba(212,160,23,0.12)" : "rgba(15,30,61,0.5)",
-                      borderColor: form.role === r ? "rgba(212,160,23,0.5)" : "rgba(212,160,23,0.12)",
-                      color: form.role === r ? "#D4A017" : "#93A5C8",
-                    }}>
+                    className="flex items-center gap-2 px-3 py-2.5 rounded-lg border text-xs text-left transition-all font-['DM_Sans'] bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{background: form.role === r ? "var(--sidebar-border)" : "var(--card)",
+                      borderColor: form.role === r ? "rgba(212,160,23,0.5)" : "var(--sidebar-border)",
+                      color: form.role === r ? "#D4A017" : "var(--secondary-foreground)"}}>
                     <div className="w-3 h-3 rounded-full border flex-shrink-0"
-                      style={{ borderColor: form.role === r ? "#D4A017" : "#5E7399", background: form.role === r ? "#D4A017" : "transparent" }} />
+                      style={{ borderColor: form.role === r ? "#D4A017" : "var(--muted-foreground)", background: form.role === r ? "#D4A017" : "transparent" }} />
                     {label}
                   </button>
                 ))}
@@ -533,12 +626,12 @@ function RegisterPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u
             <div className="grid grid-cols-2 gap-4">
               {[{ label: "Password", key: "password" }, { label: "Confirm Password", key: "confirm" }].map(({ label, key }) => (
                 <div key={key}>
-                  <label className="block text-xs font-mono mb-1.5 uppercase tracking-wider" style={{ color: "#93A5C8" }}>{label}</label>
+                  <label className="block text-xs font-mono mb-1.5 uppercase tracking-wider" style={{ color: "var(--secondary-foreground)" }}>{label}</label>
                   <input type="password" value={(form as Record<string, string>)[key]} onChange={set(key)}
                     placeholder="••••••••" className="w-full rounded-lg px-4 py-2.5 text-sm outline-none font-['DM_Sans'] transition-all"
                     style={fieldStyle}
                     onFocus={e => e.target.style.borderColor = "rgba(212,160,23,0.5)"}
-                    onBlur={e => e.target.style.borderColor = "rgba(212,160,23,0.2)"} />
+                    onBlur={e => e.target.style.borderColor = "var(--border)"} />
                 </div>
               ))}
             </div>
@@ -554,7 +647,7 @@ function RegisterPage({ onSwitch, onLogin }: { onSwitch: () => void; onLogin: (u
             </button>
           </form>
 
-          <div className="mt-5 pt-4 border-t text-center" style={{ borderColor: "rgba(212,160,23,0.1)" }}>
+          <div className="mt-5 pt-4 border-t text-center" style={{ borderColor: "var(--border)" }}>
             <button onClick={onSwitch} className="text-xs font-['DM_Sans']" style={{ color: "#D4A017" }}>
               ← Back to Login
             </button>
@@ -591,37 +684,37 @@ function ProfileModal({ user, onClose }: { user: AuthUser, onClose: () => void }
 
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-2xl border p-6 anim-fadeup relative" style={{ background: "#1C2541", borderColor: "rgba(212,160,23,0.2)", scrollbarWidth: "none" }}>
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-white transition-colors"><X size={20} /></button>
-        <h3 className="text-xl font-bold text-white mb-6 font-['Outfit'] flex items-center gap-2"><UserCircle /> Official Credentials</h3>
+      <div onClick={e => e.stopPropagation()} className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-2xl border p-6 anim-fadeup relative bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{scrollbarWidth: "none"}}>
+        <button onClick={onClose} className="absolute top-4 right-4 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:text-white transition-colors"><X size={20} /></button>
+        <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-6 font-['Outfit'] flex items-center gap-2"><UserCircle /> Official Credentials</h3>
         
         <div className="space-y-4">
           <div>
-            <label className="block text-xs font-mono text-slate-400 mb-1">Full Name</label>
+            <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">Full Name</label>
             {editing ? (
-              <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full bg-slate-900/50 border rounded-lg px-3 py-2 text-sm text-white border-slate-700" />
+              <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full bg-slate-50 dark:bg-[#0B132B] border rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white border-slate-200 dark:border-slate-200 dark:border-slate-800" />
             ) : (
-              <p className="text-sm text-white font-['DM_Sans']">{user.name}</p>
+              <p className="text-sm text-slate-900 dark:text-white font-['DM_Sans']">{user.name}</p>
             )}
           </div>
           <div>
-            <label className="block text-xs font-mono text-slate-400 mb-1">Badge ID</label>
+            <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">Badge ID</label>
             {editing ? (
-              <input type="text" value={badgeId} onChange={e => setBadgeId(e.target.value)} className="w-full bg-slate-900/50 border rounded-lg px-3 py-2 text-sm text-white border-slate-700" />
+              <input type="text" value={badgeId} onChange={e => setBadgeId(e.target.value)} className="w-full bg-slate-50 dark:bg-[#0B132B] border rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white border-slate-200 dark:border-slate-200 dark:border-slate-800" />
             ) : (
-              <p className="text-sm text-white font-['DM_Sans']">{user.badgeId}</p>
+              <p className="text-sm text-slate-900 dark:text-white font-['DM_Sans']">{user.badgeId}</p>
             )}
           </div>
           <div>
-            <label className="block text-xs font-mono text-slate-400 mb-1">Department</label>
-            <p className="text-sm text-white font-['DM_Sans']">{user.department}</p>
+            <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">Department</label>
+            <p className="text-sm text-slate-900 dark:text-white font-['DM_Sans']">{user.department}</p>
           </div>
           <div>
-            <label className="block text-xs font-mono text-slate-400 mb-1">Role / Rank</label>
-            <p className="text-sm text-white font-['DM_Sans']">{ROLE_LABELS[user.role]}</p>
+            <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">Role / Rank</label>
+            <p className="text-sm text-slate-900 dark:text-white font-['DM_Sans']">{ROLE_LABELS[user.role]}</p>
           </div>
           <div>
-            <label className="block text-xs font-mono text-slate-400 mb-1">Account Status</label>
+            <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">Account Status</label>
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
               <p className="text-sm text-green-400 font-bold font-mono">Active / E2E Encrypted</p>
@@ -629,16 +722,16 @@ function ProfileModal({ user, onClose }: { user: AuthUser, onClose: () => void }
           </div>
         </div>
 
-        <div className="mt-6 pt-4 border-t border-slate-800 flex justify-end gap-3">
+        <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-3">
           {editing ? (
             <>
-              <button onClick={() => setEditing(false)} className="px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 rounded-lg">Cancel</button>
-              <button onClick={handleSave} disabled={loading} className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-2">
+              <button onClick={() => setEditing(false)} className="px-4 py-2 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-800 rounded-lg">Cancel</button>
+              <button onClick={handleSave} disabled={loading} className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-slate-900 dark:text-white rounded-lg flex items-center gap-2">
                 {loading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Save Changes
               </button>
             </>
           ) : (
-            <button onClick={() => setEditing(true)} className="px-4 py-2 text-sm border border-slate-700 hover:bg-slate-800 text-white rounded-lg">Edit Details</button>
+            <button onClick={() => setEditing(true)} className="px-4 py-2 text-sm border border-slate-200 dark:border-slate-200 dark:border-slate-800 hover:bg-slate-800 text-slate-900 dark:text-white rounded-lg">Edit Details</button>
           )}
         </div>
       </div>
@@ -680,9 +773,9 @@ function PasswordModal({ onClose }: { onClose: () => void }) {
 
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-2xl border p-6 anim-fadeup relative" style={{ background: "#1C2541", borderColor: "rgba(212,160,23,0.2)", scrollbarWidth: "none" }}>
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-white transition-colors"><X size={20} /></button>
-        <h3 className="text-xl font-bold text-white mb-6 font-['Outfit'] flex items-center gap-2"><Key /> Change Password</h3>
+      <div onClick={e => e.stopPropagation()} className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-2xl border p-6 anim-fadeup relative bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{scrollbarWidth: "none"}}>
+        <button onClick={onClose} className="absolute top-4 right-4 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:text-white transition-colors"><X size={20} /></button>
+        <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-6 font-['Outfit'] flex items-center gap-2"><Key /> Change Password</h3>
         
         {success ? (
           <div className="py-8 flex flex-col items-center justify-center text-green-400">
@@ -693,16 +786,16 @@ function PasswordModal({ onClose }: { onClose: () => void }) {
           <form onSubmit={handleUpdate} className="space-y-4">
             {error && <div className="p-3 bg-red-500/10 border border-red-500/50 text-red-400 text-sm rounded-lg">{error}</div>}
             <div>
-              <label className="block text-xs font-mono text-slate-400 mb-1">New Password</label>
-              <input type="password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full bg-slate-900/50 border rounded-lg px-3 py-2 text-sm text-white border-slate-700 focus:outline-none focus:border-blue-500" />
+              <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">New Password</label>
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full bg-slate-50 dark:bg-[#0B132B] border rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white border-slate-200 dark:border-slate-200 dark:border-slate-800 focus:outline-none focus:border-blue-500" />
             </div>
             <div>
-              <label className="block text-xs font-mono text-slate-400 mb-1">Confirm New Password</label>
-              <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)} required className="w-full bg-slate-900/50 border rounded-lg px-3 py-2 text-sm text-white border-slate-700 focus:outline-none focus:border-blue-500" />
+              <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">Confirm New Password</label>
+              <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)} required className="w-full bg-slate-50 dark:bg-[#0B132B] border rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white border-slate-200 dark:border-slate-200 dark:border-slate-800 focus:outline-none focus:border-blue-500" />
             </div>
-            <div className="mt-6 pt-4 border-t border-slate-800 flex justify-end gap-3">
-              <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 rounded-lg">Cancel</button>
-              <button type="submit" disabled={loading} className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-2">
+            <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-3">
+              <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-800 rounded-lg">Cancel</button>
+              <button type="submit" disabled={loading} className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-slate-900 dark:text-white rounded-lg flex items-center gap-2">
                 {loading ? <Loader2 size={16} className="animate-spin" /> : "Update Password"}
               </button>
             </div>
@@ -719,7 +812,6 @@ function ProfileDropdown({ user, onLogout, onNav }: { user: AuthUser; onLogout: 
   const ref = useRef<HTMLDivElement>(null);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  const unreadAlerts = 0; // Dynamic unread alerts count
 
   useEffect(() => {
     function h(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }
@@ -730,34 +822,35 @@ function ProfileDropdown({ user, onLogout, onNav }: { user: AuthUser; onLogout: 
   return (
     <div ref={ref} className="relative">
       <button onClick={() => setOpen(v => !v)}
-        className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl border transition-all"
-        style={{
-          background: open ? "rgba(212,160,23,0.1)" : "rgba(15,30,61,0.5)",
-          borderColor: open ? "rgba(212,160,23,0.4)" : "rgba(212,160,23,0.15)",
-        }}>
+        className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl border transition-all bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{background: open ? "var(--border)" : "var(--card)",
+          borderColor: open ? "rgba(212,160,23,0.4)" : "var(--border)"}}>
         <div className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold font-mono"
           style={{ background: "linear-gradient(135deg,#1D4ED8,#1e40af)", color: "white" }}>
           {user.initials}
         </div>
         <div className="hidden sm:block text-left">
-          <div className="text-xs font-medium text-white font-['DM_Sans']">{user.name.split(" ")[0]}</div>
-          <div className="text-xs font-mono" style={{ color: "#5E7399" }}>{ROLE_LABELS[user.role].split(" ")[0]}</div>
+          <div className="text-xs font-medium text-slate-900 dark:text-white font-['DM_Sans']">
+            {user?.name ? user.name.split(" ")[0] : (user?.email?.split('@')[0] || 'Officer')}
+          </div>
+          <div className="text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
+            {user?.role && ROLE_LABELS[user.role] ? ROLE_LABELS[user.role].split(" ")[0] : 'Officer'}
+          </div>
         </div>
-        <ChevronDown size={12} style={{ color: "#5E7399", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+        <ChevronDown size={12} style={{ color: "var(--muted-foreground)", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
       </button>
 
       {open && (
         <div className="absolute right-0 top-full mt-2 w-64 rounded-xl border z-50 overflow-hidden anim-fadein"
-          style={{ background: "#0E1A3A", borderColor: "rgba(212,160,23,0.2)", boxShadow: "0 20px 50px rgba(0,0,0,0.5)" }}>
+          style={{ background: "var(--popover)", borderColor: "var(--border)", boxShadow: "0 20px 50px rgba(0,0,0,0.5)" }}>
           {/* Header */}
-          <div className="p-4 border-b" style={{ borderColor: "rgba(212,160,23,0.1)" }}>
+          <div className="p-4 border-b" style={{ borderColor: "var(--border)" }}>
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold"
                 style={{ background: "linear-gradient(135deg,#1D4ED8,#1e40af)", color: "white" }}>
                 {user.initials}
               </div>
               <div>
-                <p className="text-sm font-medium text-white font-['Outfit']">{user.name}</p>
+                <p className="text-sm font-medium text-slate-900 dark:text-white font-['Outfit']">{user.name}</p>
                 <p className="text-xs font-mono" style={{ color: "#D4A017" }}>{user.badgeId}</p>
               </div>
             </div>
@@ -767,8 +860,8 @@ function ProfileDropdown({ user, onLogout, onNav }: { user: AuthUser; onLogout: 
                 { icon: Shield, label: ROLE_LABELS[user.role] },
               ].map(({ icon: Icon, label }) => (
                 <div key={label} className="flex items-center gap-2">
-                  <Icon size={11} style={{ color: "#5E7399" }} />
-                  <span className="text-xs font-['DM_Sans']" style={{ color: "#93A5C8" }}>{label}</span>
+                  <Icon size={11} style={{ color: "var(--muted-foreground)" }} />
+                  <span className="text-xs font-['DM_Sans']" style={{ color: "var(--secondary-foreground)" }}>{label}</span>
                 </div>
               ))}
             </div>
@@ -778,12 +871,11 @@ function ProfileDropdown({ user, onLogout, onNav }: { user: AuthUser; onLogout: 
           <div className="p-2">
             {[
               { icon: UserCircle, label: "My Profile", action: () => { setOpen(false); setIsProfileModalOpen(true); } },
-              { icon: Bell, label: "Notifications", badge: unreadAlerts > 0 ? unreadAlerts : undefined, action: () => { setOpen(false); onNav("notifications"); } },
               { icon: Key, label: "Change Password", action: () => { setOpen(false); setIsPasswordModalOpen(true); } },
             ].map(({ icon: Icon, label, badge, action }) => (
-              <button key={label} onClick={action}
+              <button key={label} type="button" onClick={(e) => { e.preventDefault(); action(); }}
                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors font-['DM_Sans'] text-left"
-                style={{ color: "#93A5C8" }}
+                style={{ color: "var(--secondary-foreground)" }}
                 onMouseOver={e => (e.currentTarget.style.background = "rgba(212,160,23,0.08)")}
                 onMouseOut={e => (e.currentTarget.style.background = "transparent")}>
                 <Icon size={14} />
@@ -793,7 +885,7 @@ function ProfileDropdown({ user, onLogout, onNav }: { user: AuthUser; onLogout: 
             ))}
           </div>
 
-          <div className="p-2 border-t" style={{ borderColor: "rgba(212,160,23,0.1)" }}>
+          <div className="p-2 border-t" style={{ borderColor: "var(--border)" }}>
             <button onClick={onLogout}
               className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors font-['DM_Sans']"
               style={{ color: "#ef4444" }}
@@ -813,35 +905,37 @@ function ProfileDropdown({ user, onLogout, onNav }: { user: AuthUser; onLogout: 
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
-function Sidebar({ user, active, onNav, collapsed, onCollapse }: {
-  user: AuthUser; active: NavId; onNav: (v: NavId) => void; collapsed: boolean; onCollapse: () => void;
+function Sidebar({ user, active, onNav, collapsed, onCollapse, isAnalyzing = false }: {
+  user: AuthUser; active: NavId; onNav: (v: NavId) => void; collapsed: boolean; onCollapse: () => void; isAnalyzing?: boolean;
 }) {
-  const navItems = ALL_NAV.filter(n => ROLE_NAV[user.role].includes(n.id));
+  const { t } = useTranslation();
+  const allowedTabIds = ROLE_PERMISSIONS[user.role] || ROLE_PERMISSIONS['Investigating Officer'];
+  const navItems = ALL_NAV.filter(n => allowedTabIds.includes(n.id));
 
   return (
     <aside className="flex flex-col border-r overflow-hidden shrink-0 transition-all duration-300"
       style={{
         width: collapsed ? 56 : 224,
         background: "var(--sidebar)",
-        borderColor: "rgba(212,160,23,0.12)",
+        borderColor: "var(--sidebar-border)",
       }}>
       {/* Logo */}
-      <div className="flex items-center gap-2.5 px-3 py-4 border-b" style={{ borderColor: "rgba(212,160,23,0.12)" }}>
-        <LogoMark size={collapsed ? 28 : 32} className="flex-shrink-0" />
+      <div className={`flex ${collapsed ? 'flex-col justify-center gap-3' : 'items-center gap-2.5'} px-3 py-4 border-b`} style={{ borderColor: "var(--sidebar-border)" }}>
+        <LogoMark size={collapsed ? 28 : 32} className={`flex-shrink-0 ${collapsed ? 'mx-auto' : ''}`} />
         {!collapsed && (
-          <div className="overflow-hidden">
-            <div className="text-sm font-bold text-white font-['Outfit'] whitespace-nowrap">
+          <div className="overflow-hidden flex-1">
+            <div className="text-sm font-bold text-slate-900 dark:text-white font-['Outfit'] whitespace-nowrap">
               Crime<span style={{ color: "#D4A017" }}>GPT</span>
             </div>
-            <div className="text-xs font-mono whitespace-nowrap" style={{ color: "#5E7399" }}>ACCB · SECURE</div>
+            <div className="text-xs font-mono whitespace-nowrap" style={{ color: "var(--muted-foreground)" }}>ACCB · SECURE</div>
           </div>
         )}
         <button onClick={onCollapse}
-          className="ml-auto p-1 rounded-md transition-colors flex-shrink-0"
-          style={{ color: "#5E7399" }}
+          className={`${collapsed ? 'mx-auto mt-1' : 'ml-auto'} p-1 rounded-md transition-colors flex-shrink-0`}
+          style={{ color: "var(--muted-foreground)", background: collapsed ? "var(--sidebar-border)" : "transparent" }}
           onMouseOver={e => (e.currentTarget.style.color = "#D4A017")}
-          onMouseOut={e => (e.currentTarget.style.color = "#5E7399")}>
-          {collapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
+          onMouseOut={e => (e.currentTarget.style.color = "var(--muted-foreground)")}>
+          {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
         </button>
       </div>
 
@@ -850,27 +944,37 @@ function Sidebar({ user, active, onNav, collapsed, onCollapse }: {
         {navItems.map(({ id, label, icon: Icon, badge }) => {
           const isActive = active === id;
           return (
-            <button key={id} onClick={() => onNav(id)}
-              className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm transition-all"
+            <button key={id} type="button" onClick={(e) => { e.preventDefault(); onNav(id); }}
+              title={collapsed ? (t[id] || label) : undefined}
+              className={`w-full relative flex items-center ${collapsed ? 'justify-center' : 'gap-2.5 px-2.5'} py-2 rounded-lg text-sm transition-all`}
               style={{
-                background: isActive ? "rgba(212,160,23,0.12)" : "transparent",
-                color: isActive ? "#D4A017" : "#93A5C8",
+                background: isActive ? "var(--sidebar-border)" : "transparent",
+                color: isActive ? "#D4A017" : "var(--secondary-foreground)",
                 border: `1px solid ${isActive ? "rgba(212,160,23,0.3)" : "transparent"}`,
                 boxShadow: isActive ? "0 0 12px rgba(212,160,23,0.08)" : "none",
               }}
-              onMouseOver={e => { if (!isActive) { e.currentTarget.style.background = "rgba(212,160,23,0.05)"; e.currentTarget.style.color = "#EEF2FF"; } }}
-              onMouseOut={e => { if (!isActive) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#93A5C8"; } }}>
+              onMouseOver={e => { if (!isActive) { e.currentTarget.style.background = "rgba(212,160,23,0.05)"; e.currentTarget.style.color = "var(--foreground)"; } }}
+              onMouseOut={e => { if (!isActive) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--secondary-foreground)"; } }}>
               <Icon size={15} className="flex-shrink-0" />
               {!collapsed && (
                 <>
-                  <span className="font-['DM_Sans'] whitespace-nowrap text-sm flex-1 text-left">{label}</span>
+                  <span className="font-['DM_Sans'] whitespace-nowrap text-sm flex-1 text-left">{t(label)}</span>
                   {badge !== undefined && (
                     <span className="text-xs font-mono px-1.5 py-0.5 rounded"
-                      style={{ background: isActive ? "rgba(212,160,23,0.2)" : "rgba(29,78,216,0.2)", color: isActive ? "#D4A017" : "#93A5C8" }}>
+                      style={{ background: isActive ? "var(--border)" : "rgba(29,78,216,0.2)", color: isActive ? "#D4A017" : "var(--secondary-foreground)" }}>
                       {badge}
                     </span>
                   )}
+                  {id === "investigation" && isAnalyzing && (
+                    <span title="AI Copilot Active: Running Background Forensic Analysis..." className="ml-auto text-xs font-mono px-1.5 py-0.5 rounded border flex items-center justify-center animate-pulse"
+                      style={{ background: "rgba(212,160,23,0.1)", color: "#D4A017", borderColor: "rgba(212,160,23,0.3)" }}>
+                      <Loader2 size={12} className="animate-spin" />
+                    </span>
+                  )}
                 </>
+              )}
+              {collapsed && id === "investigation" && isAnalyzing && (
+                <div className="absolute top-0 right-0 w-2 h-2 rounded-full bg-amber-500 animate-pulse border border-white dark:border-[#1C2541]"></div>
               )}
             </button>
           );
@@ -880,15 +984,18 @@ function Sidebar({ user, active, onNav, collapsed, onCollapse }: {
       {/* Officer info */}
       {!collapsed && (
         <div className="px-3 py-3 border-t mx-2 mb-2 rounded-lg"
-          style={{ borderColor: "rgba(212,160,23,0.12)", background: "rgba(29,78,216,0.06)" }}>
+          style={{ borderColor: "var(--sidebar-border)", background: "var(--input)" }}>
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0"
               style={{ background: "linear-gradient(135deg,#1D4ED8,#1e40af)", color: "white" }}>
               {user.initials}
             </div>
-            <div className="min-w-0">
-              <p className="text-xs font-medium text-white truncate">{user.name}</p>
-              <p className="text-xs font-mono truncate" style={{ color: "#D4A017" }}>{user.badgeId}</p>
+            <div className="min-w-0 flex flex-col">
+              <p className="text-xs font-medium text-slate-900 dark:text-white truncate">{user.name}</p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                 <p className="text-[10px] font-bold text-amber-400 truncate">{user.role}</p>
+              </div>
             </div>
           </div>
         </div>
@@ -902,19 +1009,42 @@ function Sidebar({ user, active, onNav, collapsed, onCollapse }: {
 function Topbar({ user, active, onMenuToggle, onLogout, onNav }: {
   user: AuthUser; active: NavId; onMenuToggle: () => void; onLogout: () => void; onNav: (v: NavId) => void;
 }) {
-  const label = ALL_NAV.find(n => n.id === active)?.label ?? "Dashboard";
+  const { t, i18n } = useTranslation();
+  const { login } = useAuth();
+  const [optimisticLang, setOptimisticLang] = useState<string | null>(null);
+
+  const handleLanguageSwitch = (newLang: string) => {
+    setOptimisticLang(newLang);
+    i18n.changeLanguage(newLang).then(() => {
+      setOptimisticLang(null);
+    });
+    
+    supabase
+      .from('system_settings')
+      .update({ default_language: newLang })
+      .eq('id', 1)
+      .then(({ error }) => {
+        if (error) console.error("Failed to sync language to DB:", error);
+      });
+  };
+
+  const displayLang = optimisticLang || i18n.language;
+
+  const defaultLabel = ALL_NAV.find(n => n.id === active)?.label ?? "Dashboard";
+  const label = t(defaultLabel);
+  const { theme, toggleTheme } = useTheme();
 
   return (
     <header className="flex items-center gap-3 px-5 py-3.5 border-b flex-shrink-0 relative z-40"
       style={{
-        background: "rgba(6,11,24,0.9)", backdropFilter: "blur(12px)",
-        borderColor: "rgba(212,160,23,0.12)",
+        background: "var(--background)", backdropFilter: "blur(12px)",
+        borderColor: "var(--sidebar-border)",
       }}>
-      <button onClick={onMenuToggle} className="md:hidden p-1.5 rounded-lg transition-colors" style={{ color: "#5E7399" }}>
+      <button onClick={onMenuToggle} className="md:hidden p-1.5 rounded-lg transition-colors" style={{ color: "var(--muted-foreground)" }}>
         <Menu size={18} />
       </button>
 
-      <h1 className="text-sm font-semibold text-white font-['Outfit']">{label}</h1>
+      <h1 className="text-sm font-semibold text-slate-900 dark:text-white font-['Outfit']">{label}</h1>
       {active === "investigation" && (
         <span className="flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded-full"
           style={{ background: "rgba(16,185,129,0.1)", color: "#10b981", border: "1px solid rgba(16,185,129,0.2)" }}>
@@ -923,21 +1053,38 @@ function Topbar({ user, active, onMenuToggle, onLogout, onNav }: {
       )}
 
       <div className="ml-auto flex items-center gap-2">
-        <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border cursor-text transition-all"
-          style={{ background: "rgba(15,30,61,0.5)", borderColor: "rgba(212,160,23,0.15)" }}
-          onMouseOver={e => (e.currentTarget.style.borderColor = "rgba(212,160,23,0.35)")}
-          onMouseOut={e => (e.currentTarget.style.borderColor = "rgba(212,160,23,0.15)")}>
-          <Search size={12} style={{ color: "#5E7399" }} />
-          <span className="text-xs font-['DM_Sans'] w-36" style={{ color: "#5E7399" }}>Search cases...</span>
-          <span className="text-xs font-mono opacity-40 text-white">⌘K</span>
+        <div className="flex items-center gap-1 bg-white dark:bg-[#1C2541] p-1 rounded-lg border border-slate-200 dark:border-slate-800">
+          {[
+            { code: 'English', label: 'English' },
+            { code: 'Hindi', label: 'हिन्दी' },
+            { code: 'Gujarati', label: 'ગુજરાતી' }
+          ].map(lang => (
+            <button
+              key={lang.code}
+              onClick={() => handleLanguageSwitch(lang.code)}
+              className={`px-3 py-1 text-xs font-semibold rounded-md transition-colors ${displayLang === lang.code ? 'bg-[#D4A017] text-white shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+            >
+              {lang.label}
+            </button>
+          ))}
         </div>
 
-        <button className="relative p-2 rounded-lg transition-colors"
-          style={{ color: "#5E7399" }}
-          onMouseOver={e => (e.currentTarget.style.color = "#D4A017")}
-          onMouseOut={e => (e.currentTarget.style.color = "#5E7399")}>
-          <Bell size={16} />
-          <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-red-400" />
+
+
+        {/* Theme Toggle Slider */}
+        <button 
+          onClick={toggleTheme}
+          className="relative w-12 h-6 rounded-full flex items-center p-1 transition-colors border"
+          style={{ background: "var(--switch-background)", borderColor: "var(--border)" }}
+        >
+          <div className="w-full h-full flex justify-between items-center px-0.5">
+            <Moon size={10} className="text-slate-600 dark:text-slate-400" />
+            <Sun size={10} className="text-yellow-500" />
+          </div>
+          <div 
+            className="absolute left-1 top-1 w-4 h-4 rounded-full bg-white transition-transform duration-300 shadow-sm"
+            style={{ transform: theme === 'dark' ? 'translateX(0)' : 'translateX(24px)' }}
+          />
         </button>
 
         <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border"
@@ -945,6 +1092,19 @@ function Topbar({ user, active, onMenuToggle, onLogout, onNav }: {
           <Zap size={12} className="text-green-400" />
           <span className="text-xs font-mono text-green-400">SYSTEM NOMINAL</span>
         </div>
+
+        {/* Demo Role Switcher */}
+        <select 
+          value={user.role}
+          onChange={(e) => login({ ...user, role: e.target.value as UserRole })}
+          className="hidden lg:block text-xs font-mono bg-amber-500/10 border border-amber-500/30 text-amber-500 rounded-lg px-2 py-1 outline-none cursor-pointer"
+        >
+          <option value="Administrator">Administrator</option>
+          <option value="Senior Officer / Supervisor">Senior Officer / Supervisor</option>
+          <option value="Investigating Officer">Investigating Officer</option>
+          <option value="Legal Officer">Legal Officer</option>
+          <option value="Forensic Expert">Forensic Expert</option>
+        </select>
 
         <ProfileDropdown user={user} onLogout={onLogout} onNav={onNav} />
       </div>
@@ -956,12 +1116,16 @@ function Topbar({ user, active, onMenuToggle, onLogout, onNav }: {
 
 // ─── Investigation View ───────────────────────────────────────────────────────
 
-function InvestigationView() {
+function InvestigationView({
+  input, setInput, loading, resultData, error, analyzeCase
+}: {
+  input: string, setInput: (v: string) => void,
+  loading: boolean, resultData: any, error: string | null,
+  analyzeCase: () => void
+}) {
   const { user } = useAuth();
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [resultData, setResultData] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { t, i18n } = useTranslation();
+  const language = i18n.language;
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
   async function exportInvestigationReport() {
@@ -982,23 +1146,6 @@ function InvestigationView() {
       alert("Failed to generate PDF.");
     } finally {
       setIsGeneratingPdf(false);
-    }
-  }
-
-  async function analyzeCase() {
-    if (!input.trim()) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await axios.post("http://localhost:8000/api/v1/analyze-case", {
-        complaint_text: input
-      });
-      setResultData(response.data);
-    } catch (err: any) {
-      console.error(err);
-      setError("Failed to analyze the case narrative. Ensure backend is running.");
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -1035,38 +1182,35 @@ function InvestigationView() {
     <div className="flex-1 flex overflow-hidden">
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Context bar */}
-        <div className="flex items-center gap-2 px-6 py-4 border-b flex-shrink-0"
-          style={{ background: "rgba(15,30,61,0.5)", borderColor: "rgba(212,160,23,0.15)", backdropFilter: "blur(8px)" }}>
+        <div className="flex items-center gap-2 px-6 py-4 border-b flex-shrink-0 bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(8px)"}}>
           <div className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse" style={{ boxShadow: "0 0 10px rgba(59,130,246,0.8)" }} />
-          <span className="text-xs font-mono tracking-wider font-semibold" style={{ color: "#93A5C8" }}>AI-COPILOT-ACTIVE</span>
-          <ChevronRight size={14} style={{ color: "#5E7399" }} />
-          <span className="text-sm text-white font-['DM_Sans'] truncate font-medium">Advanced Narrative Analysis</span>
+          <span className="text-xs font-mono tracking-wider font-semibold" style={{ color: "var(--secondary-foreground)" }}>AI-COPILOT-ACTIVE</span>
+          <ChevronRight size={14} style={{ color: "var(--muted-foreground)" }} />
+          <span className="text-sm text-slate-900 dark:text-white font-['DM_Sans'] truncate font-medium">Advanced Narrative Analysis</span>
         </div>
 
         {/* Input & Results Area */}
         <div className="flex-1 overflow-y-auto px-6 py-8 space-y-8" style={{ scrollbarWidth: "none" }}>
           
           {/* Input Box */}
-          <div className="no-print rounded-2xl border p-6 transition-all duration-300 hover:bg-slate-800/20"
-            style={{ background: "rgba(11,21,48,0.7)", borderColor: "rgba(212,160,23,0.2)", backdropFilter: "blur(12px)" }}>
+          <div className="no-print rounded-2xl border p-6 transition-all duration-300 hover:bg-slate-800/20 bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(12px)"}}>
             <div className="flex items-center space-x-2 mb-4">
               <FileText size={18} style={{ color: "#D4A017" }} />
-              <h3 className="text-base font-semibold text-white font-['Outfit'] tracking-wide">Raw Complaint Narrative</h3>
+              <h3 className="text-base font-semibold text-slate-900 dark:text-white font-['Outfit'] tracking-wide">{t.firNarrative || 'FIR Narrative'}</h3>
             </div>
             <textarea value={input} onChange={e => setInput(e.target.value)}
-              placeholder="e.g., On 15th July, the suspect was seen transferring 50,000 INR using a forged UPI app..." rows={5}
+              placeholder={t.placeholder_fir || "e.g., On 15th July, the suspect was seen transferring 50,000 INR using a forged UPI app..."} rows={5}
               className="w-full bg-transparent text-sm outline-none resize-y leading-relaxed font-['DM_Sans'] transition-all focus:ring-2 focus:ring-indigo-500/50 rounded-lg p-3"
-              style={{ color: "#EEF2FF", border: "1px solid rgba(212,160,23,0.15)", scrollbarWidth: "none", background: "rgba(15,30,61,0.4)" }} />
+              style={{ color: "var(--foreground)", border: "1px solid rgba(212,160,23,0.15)", scrollbarWidth: "none", background: "rgba(15,30,61,0.4)" }} />
             
             <div className="mt-5 flex justify-between items-center">
-              <span className="text-xs font-mono uppercase tracking-widest" style={{ color: "#5E7399" }}>
+              <span className="text-xs font-mono uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
                 Auto-extracts entities & maps legal statutes.
               </span>
               <button onClick={analyzeCase} disabled={!input.trim() || loading}
-                className="px-6 py-2.5 rounded-xl transition-all flex items-center space-x-2 disabled:opacity-50 hover:scale-[1.02] active:scale-[0.98]"
-                style={{ background: "linear-gradient(135deg,#D4A017,#b4860b)", color: "#0B1530", boxShadow: "0 4px 15px rgba(212,160,23,0.3)" }}>
+                className="px-6 py-2.5 rounded-xl transition-all flex items-center space-x-2 disabled:opacity-50 hover:scale-[1.02] active:scale-[0.98] bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{background: "linear-gradient(135deg,#D4A017,#b4860b)", color: "var(--card)", boxShadow: "0 4px 15px rgba(212,160,23,0.3)"}}>
                 <Search size={16} />
-                <span className="text-sm font-bold">Analyze Narrative</span>
+                <span className="text-sm font-bold">{loading ? (t.investigating || 'Investigating...') : (t.startAnalysis || 'Start Analysis')}</span>
               </button>
             </div>
             {error && (
@@ -1079,14 +1223,14 @@ function InvestigationView() {
 
           {/* Elegant Loading Overlay */}
           {loading && (
-            <div className="rounded-2xl border p-10 flex flex-col items-center justify-center anim-fadein" style={{ background: "rgba(11,21,48,0.7)", borderColor: "rgba(212,160,23,0.15)", backdropFilter: "blur(12px)" }}>
+            <div className="rounded-2xl border p-10 flex flex-col items-center justify-center anim-fadein bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(12px)"}}>
               <div className="relative w-16 h-16 mb-6">
                 <div className="absolute inset-0 rounded-full border-t-2 border-r-2 animate-spin" style={{ borderColor: "#D4A017", animationDuration: '1s' }} />
                 <div className="absolute inset-2 rounded-full border-b-2 border-l-2 animate-spin" style={{ borderColor: "#3b82f6", animationDuration: '1.5s', animationDirection: 'reverse' }} />
-                <Cpu size={20} className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" style={{ color: "#EEF2FF" }} />
+                <Cpu size={20} className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" style={{ color: "var(--foreground)" }} />
               </div>
-              <h3 className="text-lg font-semibold text-white font-['Outfit'] mb-2">Compiling Legal Analysis</h3>
-              <p className="text-sm font-mono text-center animate-pulse" style={{ color: "#93A5C8" }}>Scanning narrative and querying BNS statutes...</p>
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white font-['Outfit'] mb-2">Compiling Legal Analysis</h3>
+              <p className="text-sm font-mono text-center animate-pulse" style={{ color: "var(--secondary-foreground)" }}>Scanning narrative and querying BNS statutes...</p>
             </div>
           )}
 
@@ -1094,32 +1238,32 @@ function InvestigationView() {
           {!loading && resultData && (
             <div className="space-y-8 anim-fadeup print-area">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="rounded-2xl border p-6 flex flex-col justify-center transition-all hover:bg-slate-800/40" style={{ background: "rgba(15,30,61,0.6)", borderColor: "rgba(212,160,23,0.2)", backdropFilter: "blur(10px)" }}>
+                <div className="rounded-2xl border p-6 flex flex-col justify-center transition-all hover:bg-slate-800/40 bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(10px)"}}>
                   <div className="flex items-center gap-2 mb-3">
                     <ScanLine size={16} style={{ color: "#D4A017" }} />
-                    <span className="text-xs font-mono uppercase tracking-widest font-semibold" style={{ color: "#93A5C8" }}>Classification</span>
+                    <span className="text-xs font-mono uppercase tracking-widest font-semibold" style={{ color: "var(--secondary-foreground)" }}>Classification</span>
                   </div>
-                  <span className="text-2xl font-bold text-white font-['Outfit'] leading-tight">{resultData.analysis?.crime_classification || "Unclassified"}</span>
+                  <span className="text-2xl font-bold text-slate-900 dark:text-white font-['Outfit'] leading-tight">{resultData.analysis?.crime_classification || "Unclassified"}</span>
                 </div>
                 
-                <div className="rounded-2xl border p-6 flex flex-col justify-center transition-all hover:bg-slate-800/40" style={{ background: "rgba(15,30,61,0.6)", borderColor: "rgba(212,160,23,0.2)", backdropFilter: "blur(10px)" }}>
+                <div className="rounded-2xl border p-6 flex flex-col justify-center transition-all hover:bg-slate-800/40 bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(10px)"}}>
                   <div className="flex items-center gap-2 mb-3">
                     <Activity size={16} style={{ color: "#D4A017" }} />
-                    <span className="text-xs font-mono uppercase tracking-widest font-semibold" style={{ color: "#93A5C8" }}>Severity</span>
+                    <span className="text-xs font-mono uppercase tracking-widest font-semibold" style={{ color: "var(--secondary-foreground)" }}>Severity</span>
                   </div>
                   <div className="flex items-center gap-4">
                     <span className="w-4 h-4 rounded-full border-2 border-white/20" 
                       style={{ background: getSeverityDetails(resultData.analysis?.severity_assessment?.split(' ')[0]).color, boxShadow: `0 0 20px ${getSeverityDetails(resultData.analysis?.severity_assessment?.split(' ')[0]).glow}` }} />
-                    <span className="text-2xl font-bold text-white uppercase font-['Outfit'] tracking-wide">
+                    <span className="text-2xl font-bold text-slate-900 dark:text-white uppercase font-['Outfit'] tracking-wide">
                       {getSeverityDetails(resultData.analysis?.severity_assessment?.split(' ')[0]).label}
                     </span>
                   </div>
                 </div>
               </div>
 
-              <div className="rounded-2xl border p-6 transition-all hover:bg-slate-800/40" style={{ background: "rgba(15,30,61,0.6)", borderColor: "rgba(212,160,23,0.2)", backdropFilter: "blur(10px)" }}>
+              <div className="rounded-2xl border p-6 transition-all hover:bg-slate-800/40 bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(10px)"}}>
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-base font-semibold text-white font-['Outfit'] flex items-center gap-2">
+                  <h3 className="text-base font-semibold text-slate-900 dark:text-white font-['Outfit'] flex items-center gap-2">
                     <FileSearch size={18} style={{ color: "#D4A017" }} /> Executive Summary
                   </h3>
                   <button onClick={exportInvestigationReport} disabled={isGeneratingPdf} className="no-print flex items-center gap-2 px-4 py-2 rounded-lg transition-all hover:bg-slate-700/50" style={{ border: "1px solid rgba(212,160,23,0.3)", color: "#D4A017", boxShadow: "0 0 10px rgba(212,160,23,0.2)" }}>
@@ -1127,54 +1271,54 @@ function InvestigationView() {
                     {isGeneratingPdf ? "Generating PDF..." : "Export Official Case Report"}
                   </button>
                 </div>
-                <p className="text-sm leading-relaxed" style={{ color: "#EEF2FF" }}>{resultData.analysis?.summary}</p>
+                <p className="text-sm leading-relaxed" style={{ color: "var(--foreground)" }}>{resultData.analysis?.summary}</p>
                 
                 {resultData.analysis?.recommended_immediate_action && (
-                  <div className="mt-6 p-5 rounded-xl transition-all" style={{ background: "rgba(212,160,23,0.1)", border: "1px solid rgba(212,160,23,0.25)" }}>
+                  <div className="mt-6 p-5 rounded-xl transition-all" style={{ background: "var(--border)", border: "1px solid rgba(212,160,23,0.25)" }}>
                     <h4 className="text-xs font-bold uppercase tracking-widest mb-2 flex items-center gap-2" style={{ color: "#D4A017" }}>
                       <Zap size={16} className="anim-goldpulse rounded-full" /> Immediate Action Required
                     </h4>
-                    <p className="text-sm text-white font-medium">{resultData.analysis.recommended_immediate_action}</p>
+                    <p className="text-sm text-slate-900 dark:text-white font-medium">{resultData.analysis.recommended_immediate_action}</p>
                   </div>
                 )}
               </div>
 
               <div>
                 <div className="flex items-center gap-2 mb-5">
-                  <Scale size={18} style={{ color: "#5E7399" }} />
-                  <h3 className="text-sm font-semibold uppercase tracking-widest font-mono" style={{ color: "#93A5C8" }}>Mapped Legal Provisions</h3>
+                  <Scale size={18} style={{ color: "var(--muted-foreground)" }} />
+                  <h3 className="text-sm font-semibold uppercase tracking-widest font-mono" style={{ color: "var(--secondary-foreground)" }}>{t.legalMapping || 'Mapped Legal Provisions'}</h3>
                 </div>
                 <div className="space-y-6">
                   {resultData.legal_intelligence?.recommended_provisions?.map((prov: any, idx: number) => (
-                    <div key={idx} className="rounded-2xl border transition-all hover:bg-slate-800/40 overflow-hidden flex" style={{ background: "rgba(11,21,48,0.7)", borderColor: "rgba(212,160,23,0.15)", backdropFilter: "blur(12px)" }}>
+                    <div key={idx} className="rounded-2xl border transition-all hover:bg-slate-800/40 overflow-hidden flex bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(12px)"}}>
                       {/* Accent Left Border */}
                       <div className="w-2 flex-shrink-0" style={{ background: "linear-gradient(to bottom, #D4A017, #b4860b)" }} />
                       
                       <div className="p-6 flex-1">
                         <div className="flex items-center gap-3 mb-4">
-                          <span className="text-xs font-bold px-3 py-1 rounded-md uppercase tracking-wide" style={{ background: "rgba(212,160,23,0.15)", color: "#D4A017", border: "1px solid rgba(212,160,23,0.3)" }}>
+                          <span className="text-xs font-bold px-3 py-1 rounded-md uppercase tracking-wide" style={{ background: "var(--border)", color: "#D4A017", border: "1px solid rgba(212,160,23,0.3)" }}>
                             [{prov.act}]
                           </span>
-                          <h4 className="text-xl font-bold text-white font-['Outfit']">Section {prov.section_number}</h4>
+                          <h4 className="text-xl font-bold text-slate-900 dark:text-white font-['Outfit']">Section {prov.section_number}</h4>
                         </div>
-                        <p className="text-base font-semibold mb-4" style={{ color: "#EEF2FF" }}>{prov.offence_title}</p>
+                        <p className="text-base font-semibold mb-4" style={{ color: "var(--foreground)" }}>{prov.offence_title}</p>
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-6 pt-6" style={{ borderTop: "1px solid rgba(212,160,23,0.15)" }}>
                           <div>
-                            <span className="text-xs font-mono uppercase tracking-widest mb-3 block font-semibold" style={{ color: "#93A5C8" }}>Contextual Application</span>
-                            <p className="text-sm leading-relaxed" style={{ color: "#EEF2FF" }}>{prov.why_it_applies}</p>
+                            <span className="text-xs font-mono uppercase tracking-widest mb-3 block font-semibold" style={{ color: "var(--secondary-foreground)" }}>Contextual Application</span>
+                            <p className="text-sm leading-relaxed" style={{ color: "var(--foreground)" }}>{prov.why_it_applies}</p>
                           </div>
                           <div>
-                            <span className="text-xs font-mono uppercase tracking-widest mb-3 block flex items-center gap-2 font-semibold" style={{ color: "#93A5C8" }}>
+                            <span className="text-xs font-mono uppercase tracking-widest mb-3 block flex items-center gap-2 font-semibold" style={{ color: "var(--secondary-foreground)" }}>
                               <ClipboardList size={14} /> Investigation Checklist
                             </span>
                             <div className="space-y-3">
                               {prov.investigation_checklist?.map((check: string, i: number) => (
                                 <label key={i} className="flex items-start gap-3 text-sm cursor-pointer group">
-                                  <div className="w-5 h-5 rounded border mt-0.5 flex items-center justify-center transition-all group-hover:border-emerald-400" style={{ borderColor: "rgba(212,160,23,0.4)", background: "rgba(15,30,61,0.5)" }}>
+                                  <div className="w-5 h-5 rounded border mt-0.5 flex items-center justify-center transition-all group-hover:border-emerald-400 bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{borderColor: "rgba(212,160,23,0.4)"}}>
                                     <CheckCircle size={12} className="opacity-0 group-hover:opacity-50 transition-opacity" style={{ color: "#10b981" }} />
                                   </div>
-                                  <span className="flex-1 leading-relaxed text-slate-300 group-hover:text-white transition-colors">{check}</span>
+                                  <span className="flex-1 leading-relaxed text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:text-white transition-colors">{check}</span>
                                 </label>
                               ))}
                             </div>
@@ -1185,8 +1329,8 @@ function InvestigationView() {
                   ))}
                   {(!resultData.legal_intelligence?.recommended_provisions || resultData.legal_intelligence.recommended_provisions.length === 0) && (
                     <div className="text-center py-8 rounded-2xl border border-dashed" style={{ borderColor: "rgba(94,115,153,0.3)" }}>
-                      <Scale size={24} className="mx-auto mb-3 opacity-40" style={{ color: "#5E7399" }} />
-                      <p className="text-sm italic" style={{ color: "#5E7399" }}>No legal provisions mapped yet. Run an analysis.</p>
+                      <Scale size={24} className="mx-auto mb-3 opacity-40" style={{ color: "var(--muted-foreground)" }} />
+                      <p className="text-sm italic" style={{ color: "var(--muted-foreground)" }}>No legal provisions mapped yet. Run an analysis.</p>
                     </div>
                   )}
                 </div>
@@ -1198,10 +1342,10 @@ function InvestigationView() {
       </div>
 
       {/* Right panel - Entities */}
-      <div className="hidden xl:flex w-72 border-l flex-col flex-shrink-0" style={{ background: "rgba(11,21,48,0.6)", borderColor: "rgba(212,160,23,0.15)", backdropFilter: "blur(10px)" }}>
-        <div className="px-5 py-5 border-b" style={{ borderColor: "rgba(212,160,23,0.15)" }}>
-          <h3 className="text-xs font-semibold uppercase tracking-widest font-mono flex items-center gap-2" style={{ color: "#93A5C8" }}>
-            <Users size={14} /> Extracted Entities
+      <div className="hidden xl:flex w-72 border-l flex-col flex-shrink-0" style={{ background: "rgba(11,21,48,0.6)", borderColor: "var(--border)", backdropFilter: "blur(10px)" }}>
+        <div className="px-5 py-5 border-b" style={{ borderColor: "var(--border)" }}>
+          <h3 className="text-xs font-semibold uppercase tracking-widest font-mono flex items-center gap-2" style={{ color: "var(--secondary-foreground)" }}>
+            <Users size={14} /> {t.extractedEntities || 'Extracted Entities'}
           </h3>
         </div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4" style={{ scrollbarWidth: "none" }}>
@@ -1215,17 +1359,17 @@ function InvestigationView() {
                     {getEntityIcon(e.role)} {e.role}
                   </div>
                 </div>
-                <span className="text-sm font-bold text-white truncate font-['Outfit']">{e.name}</span>
-                <span className="text-xs font-medium" style={{ color: "#93A5C8" }}>{e.entity_type}</span>
+                <span className="text-sm font-bold text-slate-900 dark:text-white truncate font-['Outfit']">{e.name}</span>
+                <span className="text-xs font-medium" style={{ color: "var(--secondary-foreground)" }}>{e.entity_type}</span>
               </div>
             );
           })}
           {(!resultData?.analysis?.extracted_entities || resultData.analysis.extracted_entities.length === 0) && (
             <div className="text-center py-10">
-              <div className="w-12 h-12 rounded-full mx-auto mb-4 flex items-center justify-center" style={{ background: "rgba(94,115,153,0.1)" }}>
-                <Users size={20} className="opacity-50" style={{ color: "#5E7399" }} />
+              <div className="w-12 h-12 rounded-full mx-auto mb-4 flex items-center justify-center" style={{ background: "var(--secondary)" }}>
+                <Users size={20} className="opacity-50" style={{ color: "var(--muted-foreground)" }} />
               </div>
-              <p className="text-xs font-medium" style={{ color: "#5E7399" }}>No entities extracted yet.</p>
+              <p className="text-xs font-medium" style={{ color: "var(--muted-foreground)" }}>{t.no_entities || 'No entities extracted yet.'}</p>
             </div>
           )}
         </div>
@@ -1264,7 +1408,7 @@ function InvestigationView() {
           </div>
 
           <div style={{ marginBottom: "15px" }}>
-            <h3 style={{ fontSize: "12px", borderBottom: "1px solid #000", paddingBottom: "3px", marginBottom: "5px", textTransform: "uppercase" }}>Extracted Entities</h3>
+            <h3 style={{ fontSize: "12px", borderBottom: "1px solid #000", paddingBottom: "3px", marginBottom: "5px", textTransform: "uppercase" }}>{t.extractedEntities || 'Extracted Entities'}</h3>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "10px", marginBottom: "10px" }}>
               <thead>
                 <tr style={{ background: "#f1f1f1" }}>
@@ -1286,7 +1430,7 @@ function InvestigationView() {
           </div>
 
           <div style={{ marginBottom: "15px", pageBreakInside: "avoid" }}>
-            <h3 style={{ fontSize: "12px", borderBottom: "1px solid #000", paddingBottom: "3px", marginBottom: "5px", textTransform: "uppercase" }}>Recommended Legal Provisions</h3>
+            <h3 style={{ fontSize: "12px", borderBottom: "1px solid #000", paddingBottom: "3px", marginBottom: "5px", textTransform: "uppercase" }}>{t.legalMapping || 'Recommended Legal Provisions'}</h3>
             {resultData?.legal_intelligence?.recommended_provisions?.map((prov: any, idx: number) => (
               <div key={idx} style={{ marginBottom: "8px" }}>
                 <p style={{ fontSize: "11px", fontWeight: "bold", margin: "0 0 3px 0", lineHeight: "1.3" }}>[{prov.act}] Section {prov.section_number}: {prov.offence_title}</p>
@@ -1337,9 +1481,9 @@ function InvestigationView() {
 
 // ─── Cases View ───────────────────────────────────────────────────────────────
 
-function CasesView() {
+function CasesView({ cases = [], onCaseCreated, onCaseUpdated, onCaseDeleted }: { cases?: CaseData[], onCaseCreated?: (c: CaseData) => void, onCaseUpdated?: (c: CaseData) => void, onCaseDeleted?: (id: string) => void }) {
   const { user } = useAuth();
-  const [cases, setCases] = useState<CaseData[]>([]);
+  const { t } = useTranslation();
   const [filter, setFilter] = useState<"all" | CaseStatus>("all");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [pdfCaseId, setPdfCaseId] = useState<string | null>(null);
@@ -1381,18 +1525,39 @@ function CasesView() {
     }
   }
 
-  useEffect(() => {
-    fetchCases();
-  }, []);
-
-  async function fetchCases() {
-    const { data, error } = await supabase.from('cases').select('*').order('date', { ascending: false });
-    if (!error && data) {
-      setCases(data as CaseData[]);
-    }
-  }
+  // Local fetch logic removed - now using global state.
 
   const filtered = filter === "all" ? cases : cases.filter(c => c.status === filter);
+
+  const handleUpdateStatus = async (e: React.ChangeEvent<HTMLSelectElement>, caseId: string) => {
+    e.stopPropagation();
+    const newStatus = e.target.value as CaseStatus;
+    const { error } = await supabase.from('cases').update({ status: newStatus }).eq('id', caseId);
+    if (!error && onCaseUpdated) {
+      const updatedCase = cases.find(c => c.id === caseId);
+      if (updatedCase) onCaseUpdated({ ...updatedCase, status: newStatus });
+    }
+  };
+
+  const handleUpdateAssignee = async (e: React.FocusEvent<HTMLInputElement>, caseId: string, oldAssignee: string) => {
+    e.stopPropagation();
+    const newAssignee = e.target.value;
+    if (newAssignee === oldAssignee) return;
+    const { error } = await supabase.from('cases').update({ assignee: newAssignee }).eq('id', caseId);
+    if (!error && onCaseUpdated) {
+      const updatedCase = cases.find(c => c.id === caseId);
+      if (updatedCase) onCaseUpdated({ ...updatedCase, assignee: newAssignee });
+    }
+  };
+
+  const handleDeleteCase = async (e: React.MouseEvent, caseId: string) => {
+    e.stopPropagation();
+    if (!window.confirm("Are you sure you want to delete this case?")) return;
+    const { error } = await supabase.from('cases').delete().eq('id', caseId);
+    if (!error && onCaseDeleted) {
+      onCaseDeleted(caseId);
+    }
+  };
 
   const handleCreateCase = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1400,92 +1565,123 @@ function CasesView() {
     
     const { data: { user } } = await supabase.auth.getUser();
     
-    const newCase = {
-      id: `ACCB-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+    const safeCasePayload = {
+      id: crypto.randomUUID(),
       title,
-      status,
+      status: status?.toLowerCase() || 'active',
       priority: "high", 
       assignee,
-      date: assignedDate,
-      location: "Unassigned",
       progress: 0,
+      date: new Date().toISOString(),
+      location: "Unassigned",
+      case_number: `ACCB-${Math.floor(1000 + Math.random() * 9000)}`,
       user_id: user?.id || null
     };
     
-    const { error } = await supabase.from('cases').insert([newCase]);
-    if (error) {
-      alert(error.message);
-      return;
+    try {
+      const { data: createdCase, error } = await supabase.from('cases').insert([safeCasePayload]).select().single();
+      if (error) {
+        toast.error(`Database Error: ${error.message}`);
+        return;
+      }
+      
+      toast.success("Case successfully initialized in Registry.");
+      setIsModalOpen(false);
+      
+      // Reset form
+      setTitle("");
+      setCategory("Cyber Fraud");
+      setAssignee("IO Rahul Sharma");
+      setStatus("active");
+      
+      if (onCaseCreated) onCaseCreated((createdCase || safeCasePayload) as CaseData);
+    } catch (err: any) {
+      toast.error(`Network Error: ${err.message || 'Failed to connect to database'}`);
     }
-    
-    setIsModalOpen(false);
-    
-    // Reset form
-    setTitle("");
-    setCategory("Cyber Fraud");
-    setAssignee("IO Rahul Sharma");
-    setStatus("active");
-    fetchCases();
   };
 
   return (
     <div className="flex-1 overflow-y-auto p-6 relative" style={{ scrollbarWidth: "none" }}>
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-6">
         <div>
-          <h2 className="text-lg font-semibold text-white font-['Outfit']">Case Registry</h2>
-          <p className="text-sm font-['DM_Sans']" style={{ color: "#5E7399" }}>{cases.length} cases · {cases.filter(c => c.status === "active").length} active</p>
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white font-['Outfit']">{t.case_registry || 'Case Registry'}</h2>
+          <p className="text-sm font-['DM_Sans']" style={{ color: "var(--muted-foreground)" }}>{cases.length} cases · {cases.filter(c => c.status === "active").length} active</p>
         </div>
         <div className="sm:ml-auto flex items-center gap-2">
-          <div className="flex items-center gap-1 rounded-lg p-1" style={{ background: "#0B1530", border: "1px solid rgba(212,160,23,0.12)" }}>
+          <div className="flex items-center gap-1 rounded-lg p-1 bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{border: "1px solid rgba(212,160,23,0.12)"}}>
             {(["all", "active", "critical", "pending", "closed"] as const).map(s => (
               <button key={s} onClick={() => setFilter(s)}
                 className="px-3 py-1 rounded-md text-xs font-mono transition-all"
                 style={{
-                  background: filter === s ? "#0F1E3D" : "transparent",
-                  color: filter === s ? "#D4A017" : "#5E7399",
+                  background: filter === s ? "var(--secondary)" : "transparent",
+                  color: filter === s ? "#D4A017" : "var(--muted-foreground)",
                   border: filter === s ? "1px solid rgba(212,160,23,0.25)" : "1px solid transparent",
                   textTransform: "capitalize"
-                }}>{s}</button>
+                }}>{t[`filter_${s}`] || s}</button>
             ))}
           </div>
           <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-all font-['Outfit']"
             style={{ background: "linear-gradient(135deg,#1D4ED8,#1e40af)", color: "white", border: "1px solid rgba(29,78,216,0.4)" }}>
-            <Plus size={13} />New Case
+            <Plus size={13} />{t.new_case_btn || 'New Case'}
           </button>
         </div>
       </div>
 
-      <div className="rounded-xl border overflow-hidden" style={{ background: "#0B1530", borderColor: "rgba(212,160,23,0.12)" }}>
+      <div className="rounded-xl border overflow-hidden bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{borderColor: "var(--sidebar-border)"}}>
         <div className="hidden md:grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 px-5 py-3 border-b text-xs font-mono uppercase tracking-wider"
-          style={{ borderColor: "rgba(212,160,23,0.1)", color: "#5E7399" }}>
-          <span>Case</span><span>Status</span><span>Assignee</span><span>Date</span><span>Progress</span>
+          style={{ borderColor: "var(--border)", color: "var(--muted-foreground)" }}>
+          <span>{t.col_case || 'Case'}</span><span>{t.col_status || 'Status'}</span><span>{t.col_assignee || 'Assignee'}</span><span>{t.col_date || 'Date'}</span><span>{t.col_progress || 'Progress'}</span>
         </div>
         {cases.length === 0 ? (
-          <div className="p-8 text-center text-xs font-mono" style={{ color: "#5E7399" }}>No cases found. Create a new case to get started.</div>
+          <div className="p-8 text-center text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>No cases found. Create a new case to get started.</div>
         ) : filtered.length === 0 ? (
-          <div className="p-8 text-center text-xs font-mono" style={{ color: "#5E7399" }}>No {filter} cases found.</div>
+          <div className="p-8 text-center text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>No {filter} cases found.</div>
         ) : filtered.map(c => (
           <div key={c.id} className="grid md:grid-cols-[1fr_auto_auto_auto_auto] gap-4 px-5 py-4 border-b items-center cursor-pointer transition-all"
-            style={{ borderColor: "rgba(212,160,23,0.06)" }}
+            style={{ borderColor: "var(--border)" }}
             onMouseOver={e => (e.currentTarget.style.background = "rgba(212,160,23,0.04)")}
             onMouseOut={e => (e.currentTarget.style.background = "transparent")}>
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-2 h-2 rounded-full flex-shrink-0"
-                style={{ background: { critical:"#dc2626", active:"#1D4ED8", pending:"#D4A017", closed:"#5E7399" }[c.status] }} />
+                style={{ background: { critical:"#dc2626", active:"#1D4ED8", pending:"#D4A017", closed:"var(--muted-foreground)" }[c.status] }} />
               <div className="min-w-0">
-                <p className="text-sm font-medium text-white truncate font-['DM_Sans']">{c.title}</p>
+                <p className="text-sm font-medium text-slate-900 dark:text-white truncate font-['DM_Sans']">{c.title}</p>
                 <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-xs font-mono" style={{ color: "#5E7399" }}>{c.id}</span>
-                  <span className="text-xs flex items-center gap-1 font-['DM_Sans']" style={{ color: "#5E7399" }}>
+                  <span className="text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>{c.id}</span>
+                  <span className="text-xs flex items-center gap-1 font-['DM_Sans']" style={{ color: "var(--muted-foreground)" }}>
                     <MapPin size={10} />{c.location}
                   </span>
                 </div>
               </div>
             </div>
-            <StatusBadge status={c.status} />
-            <span className="hidden md:block text-xs font-['DM_Sans']" style={{ color: "#93A5C8" }}>{c.assignee}</span>
-            <span className="hidden md:block text-xs font-mono" style={{ color: "#5E7399" }}>{c.date}</span>
+            <div className="hidden md:block">
+              <select 
+                value={c.status} 
+                onChange={(e) => handleUpdateStatus(e, c.id)}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-transparent text-xs font-mono font-bold focus:outline-none cursor-pointer"
+                style={{ color: { critical:"#dc2626", active:"#3b82f6", pending:"#D4A017", closed:"var(--muted-foreground)" }[c.status] }}
+              >
+                <option value="active" className="text-slate-900">ACTIVE</option>
+                <option value="pending" className="text-slate-900">PENDING</option>
+                <option value="critical" className="text-slate-900">CRITICAL</option>
+                <option value="closed" className="text-slate-900">CLOSED</option>
+              </select>
+            </div>
+            <div className="hidden md:block text-xs font-['DM_Sans']" style={{ color: "var(--secondary-foreground)" }}>
+              <input 
+                type="text" 
+                defaultValue={c.assignee === 'Unassigned' ? (t.unassigned || 'Unassigned') : c.assignee}
+                onBlur={(e) => handleUpdateAssignee(e, c.id, c.assignee)}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-transparent w-full focus:outline-none border-b border-transparent focus:border-indigo-500 pb-0.5 transition-colors" 
+              />
+            </div>
+            <span className="hidden md:block text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>{c.date ? new Date(c.date).toLocaleDateString('en-GB') : ''}</span>
             <div className="hidden md:flex items-center justify-end w-auto gap-3">
+              <button onClick={(e) => handleDeleteCase(e, c.id)} className="p-1.5 rounded text-red-500/70 hover:bg-red-500/10 hover:text-red-500 transition-colors" title="Delete Case">
+                <Trash size={14} />
+              </button>
               {c.status === "closed" && (
                 <button 
                   onClick={(e) => { e.stopPropagation(); exportCaseSummary(c); }} 
@@ -1493,7 +1689,7 @@ function CasesView() {
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-['Outfit'] transition-all hover:bg-slate-700/50"
                   style={{ border: "1px solid rgba(212,160,23,0.3)", color: "#D4A017" }}>
                   {pdfCaseId === c.id ? <Loader2 size={13} className="animate-spin" /> : <DownloadCloud size={13} />}
-                  {pdfCaseId === c.id ? "Generating PDF..." : "Download Case File (PDF)"}
+                  {pdfCaseId === c.id ? "Generating..." : "PDF"}
                 </button>
               )}
               <span className="text-xs font-mono font-bold" style={{ color: "#D4A017" }}>{c.progress}%</span>
@@ -1504,34 +1700,34 @@ function CasesView() {
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(11,21,48,0.8)", backdropFilter: "blur(4px)" }}>
-          <div className="w-full max-w-md rounded-2xl border p-6 anim-fadeup" style={{ background: "#1C2541", borderColor: "rgba(212,160,23,0.2)", boxShadow: "0 10px 40px rgba(0,0,0,0.5)" }}>
-            <h3 className="text-xl font-bold text-white mb-1 font-['Outfit']">Create New Case</h3>
-            <p className="text-sm mb-6" style={{ color: "#93A5C8" }}>Initialize a new investigation record.</p>
+          <div className="w-full max-w-md rounded-2xl border p-6 anim-fadeup bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{boxShadow: "0 10px 40px rgba(0,0,0,0.5)"}}>
+            <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-1 font-['Outfit']">Create New Case</h3>
+            <p className="text-sm mb-6" style={{ color: "var(--secondary-foreground)" }}>Initialize a new investigation record.</p>
             
             <form onSubmit={handleCreateCase} className="space-y-4">
               <div>
-                <label className="block text-xs font-mono mb-1" style={{ color: "#93A5C8" }}>Operation Title</label>
+                <label className="block text-xs font-mono mb-1" style={{ color: "var(--secondary-foreground)" }}>Operation Title</label>
                 <input type="text" required value={title} onChange={e => setTitle(e.target.value)} 
-                  className="w-full bg-slate-900/50 border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-500" 
+                  className="w-full bg-slate-50 dark:bg-[#0B132B] border rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500" 
                   style={{ borderColor: "rgba(94,115,153,0.3)" }} placeholder="e.g. Operation Nightfall" />
               </div>
               <div>
-                <label className="block text-xs font-mono mb-1" style={{ color: "#93A5C8" }}>Category</label>
+                <label className="block text-xs font-mono mb-1" style={{ color: "var(--secondary-foreground)" }}>Category</label>
                 <input type="text" value={category} onChange={e => setCategory(e.target.value)}
-                  className="w-full bg-slate-900/50 border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-500" 
+                  className="w-full bg-slate-50 dark:bg-[#0B132B] border rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500" 
                   style={{ borderColor: "rgba(94,115,153,0.3)" }} />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-mono mb-1" style={{ color: "#93A5C8" }}>Assignee</label>
+                  <label className="block text-xs font-mono mb-1" style={{ color: "var(--secondary-foreground)" }}>Assignee</label>
                   <input type="text" value={assignee} onChange={e => setAssignee(e.target.value)}
-                    className="w-full bg-slate-900/50 border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-500" 
+                    className="w-full bg-slate-50 dark:bg-[#0B132B] border rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500" 
                     style={{ borderColor: "rgba(94,115,153,0.3)" }} />
                 </div>
                 <div>
-                  <label className="block text-xs font-mono mb-1" style={{ color: "#93A5C8" }}>Status</label>
+                  <label className="block text-xs font-mono mb-1" style={{ color: "var(--secondary-foreground)" }}>Status</label>
                   <select value={status} onChange={e => setStatus(e.target.value as CaseStatus)}
-                    className="w-full bg-slate-900/50 border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 appearance-none" 
+                    className="w-full bg-slate-50 dark:bg-[#0B132B] border rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 appearance-none" 
                     style={{ borderColor: "rgba(94,115,153,0.3)" }}>
                     <option value="active">Active</option>
                     <option value="critical">Critical</option>
@@ -1540,13 +1736,13 @@ function CasesView() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-mono mb-1" style={{ color: "#93A5C8" }}>Assigned Date</label>
+                <label className="block text-xs font-mono mb-1" style={{ color: "var(--secondary-foreground)" }}>Assigned Date</label>
                 <input type="date" value={assignedDate} onChange={e => setAssignedDate(e.target.value)}
-                  className="w-full bg-slate-900/50 border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 [color-scheme:dark]" 
+                  className="w-full bg-slate-50 dark:bg-[#0B132B] border rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 [color-scheme:dark]" 
                   style={{ borderColor: "rgba(94,115,153,0.3)" }} />
               </div>
-              <div className="pt-4 flex items-center justify-end gap-3 border-t mt-6" style={{ borderColor: "rgba(212,160,23,0.1)", paddingTop: "1rem" }}>
-                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-sm font-['Outfit'] rounded-lg transition-colors hover:bg-slate-800" style={{ color: "#93A5C8" }}>
+              <div className="pt-4 flex items-center justify-end gap-3 border-t mt-6" style={{ borderColor: "var(--border)", paddingTop: "1rem" }}>
+                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-sm font-['Outfit'] rounded-lg transition-colors hover:bg-slate-800" style={{ color: "var(--secondary-foreground)" }}>
                   Cancel
                 </button>
                 <button type="submit" className="px-5 py-2 text-sm font-['Outfit'] font-bold rounded-lg transition-all hover:scale-105" style={{ background: "linear-gradient(135deg,#1D4ED8,#1e40af)", color: "white", boxShadow: "0 4px 15px rgba(29,78,216,0.3)" }}>
@@ -1641,8 +1837,8 @@ function ReportsView() {
   return (
     <div className="flex-1 overflow-y-auto p-6" style={{ scrollbarWidth: "none" }}>
       <div className="mb-6">
-        <h2 className="text-lg font-semibold text-white font-['Outfit']">Intelligence Reports</h2>
-        <p className="text-sm font-['DM_Sans']" style={{ color: "#5E7399" }}>AI-generated case summaries and analytical briefs</p>
+        <h2 className="text-lg font-semibold text-slate-900 dark:text-white font-['Outfit']">Intelligence Reports</h2>
+        <p className="text-sm font-['DM_Sans']" style={{ color: "var(--muted-foreground)" }}>AI-generated case summaries and analytical briefs</p>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {[
@@ -1651,12 +1847,11 @@ function ReportsView() {
           { title: "Financial Network Analysis — Gujarat", type: "Analytical Report", date: "Nov 12, 2024", pages: 31, status: "ready", color: "#7c3aed" },
           { title: "Phishing Campaigns — Banking Sector", type: "Threat Assessment", date: "Nov 10, 2024", pages: 15, status: "draft", color: "#F4C430" },
           { title: "Dark Web Activity — November 2024", type: "Intelligence Brief", date: "Nov 8, 2024", pages: 9, status: "ready", color: "#10b981" },
-          { title: "Monthly Activity Digest", type: "Digest", date: "Nov 7, 2024", pages: 6, status: "processing", color: "#5E7399" },
+          { title: "Monthly Activity Digest", type: "Digest", date: "Nov 7, 2024", pages: 6, status: "processing", color: "var(--muted-foreground)" },
         ].map(r => (
-          <div key={r.title} className="rounded-xl border p-5 cursor-pointer transition-all group"
-            style={{ background: "#0B1530", borderColor: "rgba(212,160,23,0.12)" }}
+          <div key={r.title} className="rounded-xl border p-5 cursor-pointer transition-all group bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{borderColor: "var(--sidebar-border)"}}
             onMouseOver={e => { e.currentTarget.style.borderColor = `${r.color}40`; e.currentTarget.style.boxShadow = `0 0 20px ${r.color}10`; }}
-            onMouseOut={e => { e.currentTarget.style.borderColor = "rgba(212,160,23,0.12)"; e.currentTarget.style.boxShadow = "none"; }}>
+            onMouseOut={e => { e.currentTarget.style.borderColor = "var(--sidebar-border)"; e.currentTarget.style.boxShadow = "none"; }}>
             <div className="flex items-start justify-between mb-3">
               <div className="w-8 h-8 rounded-lg flex items-center justify-center"
                 style={{ background: `${r.color}18`, border: `1px solid ${r.color}28` }}>
@@ -1664,15 +1859,15 @@ function ReportsView() {
               </div>
               <span className="text-xs font-mono px-2 py-0.5 rounded-md border"
                 style={{
-                  background: r.status === "ready" ? "rgba(16,185,129,0.1)" : r.status === "draft" ? "rgba(212,160,23,0.1)" : "rgba(94,115,153,0.1)",
-                  color: r.status === "ready" ? "#10b981" : r.status === "draft" ? "#D4A017" : "#5E7399",
-                  borderColor: r.status === "ready" ? "rgba(16,185,129,0.2)" : r.status === "draft" ? "rgba(212,160,23,0.2)" : "rgba(94,115,153,0.2)",
+                  background: r.status === "ready" ? "rgba(16,185,129,0.1)" : r.status === "draft" ? "var(--border)" : "var(--secondary)",
+                  color: r.status === "ready" ? "#10b981" : r.status === "draft" ? "#D4A017" : "var(--muted-foreground)",
+                  borderColor: r.status === "ready" ? "rgba(16,185,129,0.2)" : r.status === "draft" ? "var(--border)" : "rgba(94,115,153,0.2)",
                 }}>{r.status}</span>
             </div>
-            <h3 className="text-sm font-medium text-white leading-snug mb-1 font-['Outfit']">{r.title}</h3>
-            <p className="text-xs mb-3 font-['DM_Sans']" style={{ color: "#5E7399" }}>{r.type}</p>
+            <h3 className="text-sm font-medium text-slate-900 dark:text-white leading-snug mb-1 font-['Outfit']">{r.title}</h3>
+            <p className="text-xs mb-3 font-['DM_Sans']" style={{ color: "var(--muted-foreground)" }}>{r.type}</p>
             <div className="flex items-center justify-between pt-3 border-t" style={{ borderColor: "rgba(212,160,23,0.08)" }}>
-              <div className="flex items-center gap-3 text-xs font-mono" style={{ color: "#5E7399" }}>
+              <div className="flex items-center gap-3 text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
                 <span className="flex items-center gap-1"><Calendar size={10} />{r.date}</span>
                 <span>{r.pages}p</span>
               </div>
@@ -1688,54 +1883,65 @@ function ReportsView() {
 
 // ─── Dashboard View ───────────────────────────────────────────────────────────
 
-function DashboardView({ user }: { user: AuthUser }) {
+function DashboardView({ user, cases = [], evidence = [], isLoadingData = false }: { user: AuthUser, cases?: CaseData[], evidence?: any[], isLoadingData?: boolean }) {
+  const { t } = useTranslation();
+  
+  const activeCasesCount = cases.filter(c => c.status?.toLowerCase() === 'active').length;
+  const criticalCasesCount = cases.filter(c => c.priority?.toLowerCase() === 'critical' || c.status?.toLowerCase() === 'critical').length;
+  const pendingCasesCount = cases.filter(c => c.status?.toLowerCase() === 'pending').length;
+  const evidenceCount = evidence.length;
+  const closedCasesCount = cases.filter(c => c.status === 'closed').length;
+
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-6 anim-fadeup" style={{ scrollbarWidth: "none" }}>
       <div className="mb-2">
-        <h2 className="text-xl font-bold text-white font-['Outfit']">Dashboard Overview</h2>
-        <p className="text-sm font-['DM_Sans']" style={{ color: "#93A5C8" }}>Welcome back, {user.name}. Here is the current precinct status.</p>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-white font-['Outfit']">{t.dashboard_overview || 'Dashboard Overview'}</h2>
+        <p className="text-sm font-['DM_Sans']" style={{ color: "var(--secondary-foreground)" }}>
+          {t.welcome_back ? t.welcome_back.replace('Mitesh Singhvi', user.name).replace('मितेश सिंघવી', user.name).replace('મિતેશ સિંઘવી', user.name) : `Welcome back, ${user.name}. Here is the current precinct status.`}
+        </p>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {[
-          { label: "Active Cases", value: "0", icon: Briefcase, color: "#1D4ED8", change: "-" },
-          { label: "Critical Priority", value: "0", icon: AlertTriangle, color: "#dc2626", change: "-" },
-          { label: "Evidence Logged", value: "0", icon: ScanLine, color: "#D4A017", change: "-" },
-          { label: "Resolutions", value: "0", icon: CheckCircle2, color: "#10b981", change: "-" }
+          { label: t.active_cases || "Active Cases", value: isLoadingData ? "..." : activeCasesCount.toString(), icon: Briefcase, color: "#1D4ED8", change: "-" },
+          { label: t.critical_priority || "Critical Priority", value: isLoadingData ? "..." : criticalCasesCount.toString(), icon: AlertTriangle, color: "#dc2626", change: "-" },
+          { label: t.pending_cases || "Pending Cases", value: isLoadingData ? "..." : pendingCasesCount.toString(), icon: Clock, color: "#f59e0b", change: "-" },
+          { label: t.evidence_logged || "Evidence Logged", value: isLoadingData ? "..." : evidenceCount.toString(), icon: ScanLine, color: "#D4A017", change: "-" },
+          { label: t.resolutions || "Resolutions", value: isLoadingData ? "..." : closedCasesCount.toString(), icon: CheckCircle2, color: "#10b981", change: "-" }
         ].map((s, i) => (
-          <div key={i} className="rounded-2xl border p-5 transition-all hover:-translate-y-1" style={{ background: "rgba(11,21,48,0.7)", borderColor: "rgba(212,160,23,0.15)", backdropFilter: "blur(12px)" }}>
+          <div key={i} className="rounded-2xl border p-5 transition-all hover:-translate-y-1 bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(12px)"}}>
             <div className="flex items-start justify-between mb-2">
               <div className="p-2 rounded-lg" style={{ background: `${s.color}15`, color: s.color }}>
                 <s.icon size={18} />
               </div>
               <span className="text-xs font-mono font-semibold" style={{ color: s.color }}>{s.change}</span>
             </div>
-            <h3 className="text-3xl font-bold text-white font-['Outfit'] mt-4">{s.value}</h3>
-            <p className="text-xs font-mono uppercase tracking-widest mt-1" style={{ color: "#5E7399" }}>{s.label}</p>
+            <h3 className="text-3xl font-bold text-slate-900 dark:text-white font-['Outfit'] mt-4">{s.value}</h3>
+            <p className="text-xs font-mono uppercase tracking-widest mt-1" style={{ color: "var(--muted-foreground)" }}>{s.label}</p>
           </div>
         ))}
       </div>
       
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="rounded-2xl border p-6" style={{ background: "rgba(11,21,48,0.7)", borderColor: "rgba(212,160,23,0.15)", backdropFilter: "blur(12px)" }}>
-          <h3 className="text-sm font-semibold text-white font-['Outfit'] mb-4 flex items-center gap-2"><TrendingUp size={16} style={{ color: "#D4A017" }}/> Crime Trend Distribution</h3>
+        <div className="rounded-2xl border p-6 bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(12px)"}}>
+          <h3 className="text-sm font-semibold text-slate-900 dark:text-white font-['Outfit'] mb-4 flex items-center gap-2"><TrendingUp size={16} style={{ color: "#D4A017" }}/> {t.crime_trend || 'Crime Trend Distribution'}</h3>
           <div className="h-64 w-full flex items-end justify-between gap-2 px-2">
             {[40, 70, 45, 90, 65, 80, 55].map((h, i) => (
               <div key={i} className="w-full rounded-t-sm relative group transition-all" style={{ height: `${h}%`, background: "rgba(29,78,216,0.3)" }}>
                 <div className="absolute top-0 left-0 w-full rounded-t-sm" style={{ height: '4px', background: "#D4A017" }} />
-                <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-black/80 text-white text-xs px-2 py-1 rounded transition-opacity">{h}</div>
+                <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-black/80 text-slate-900 dark:text-white text-xs px-2 py-1 rounded transition-opacity">{h}</div>
               </div>
             ))}
           </div>
-          <div className="flex justify-between mt-4 text-xs font-mono" style={{ color: "#5E7399" }}>
+          <div className="flex justify-between mt-4 text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
             <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
           </div>
         </div>
         
-        <div className="rounded-2xl border p-6" style={{ background: "rgba(11,21,48,0.7)", borderColor: "rgba(212,160,23,0.15)", backdropFilter: "blur(12px)" }}>
-           <h3 className="text-sm font-semibold text-white font-['Outfit'] mb-4 flex items-center gap-2"><ShieldAlert size={16} style={{ color: "#D4A017" }}/> Recent Network Alerts</h3>
+        <div className="rounded-2xl border p-6 bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(12px)"}}>
+           <h3 className="text-sm font-semibold text-slate-900 dark:text-white font-['Outfit'] mb-4 flex items-center gap-2"><ShieldAlert size={16} style={{ color: "#D4A017" }}/> {t.recent_alerts || 'Recent Network Alerts'}</h3>
            <div className="space-y-4">
              {/* Dynamic alerts will populate here */}
-             <div className="text-center py-4 text-xs font-mono" style={{ color: "#5E7399" }}>No active network alerts</div>
+             <div className="text-center py-4 text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>{t.no_alerts || 'No active network alerts'}</div>
            </div>
         </div>
       </div>
@@ -1745,174 +1951,464 @@ function DashboardView({ user }: { user: AuthUser }) {
 
 // ─── Documents View ───────────────────────────────────────────────────────────
 
-function DocumentsView() {
+function DocumentsView({ user }: { user: AuthUser }) {
+  const { t } = useTranslation();
   const [generating, setGenerating] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeCategory, setActiveCategory] = useState("All Documents");
+  const [isFIRModalOpen, setIsFIRModalOpen] = useState(false);
+  const [isSec94ModalOpen, setIsSec94ModalOpen] = useState(false);
+  const [isSec106ModalOpen, setIsSec106ModalOpen] = useState(false);
+  const [isSeizureModalOpen, setIsSeizureModalOpen] = useState(false);
+  const [isArrestModalOpen, setIsArrestModalOpen] = useState(false);
+  const [isRemandModalOpen, setIsRemandModalOpen] = useState(false);
+  const [isChargesheetModalOpen, setIsChargesheetModalOpen] = useState(false);
+  const [isBailModalOpen, setIsBailModalOpen] = useState(false);
+  const [isWarrantModalOpen, setIsWarrantModalOpen] = useState(false);
 
-  const handleGenerate = async (type: string) => {
+  const handleGenerate = async (docId: string, type: string) => {
+    if (docId === 'fir') {
+      setIsFIRModalOpen(true);
+      return;
+    }
+    if (docId === 'sec94') {
+      setIsSec94ModalOpen(true);
+      return;
+    }
+    if (docId === 'freeze') {
+      setIsSec106ModalOpen(true);
+      return;
+    }
+    if (docId === 'seizure') {
+      setIsSeizureModalOpen(true);
+      return;
+    }
+    if (docId === 'arrest') {
+      setIsArrestModalOpen(true);
+      return;
+    }
+    if (docId === 'remand') {
+      setIsRemandModalOpen(true);
+      return;
+    }
+    if (docId === 'chargesheet') {
+      setIsChargesheetModalOpen(true);
+      return;
+    }
+    if (docId === 'bail_opp') {
+      setIsBailModalOpen(true);
+      return;
+    }
+    if (docId === 'search_warrant') {
+      setIsWarrantModalOpen(true);
+      return;
+    }
     setGenerating(type);
     try {
       await new Promise(r => setTimeout(r, 1500));
-      alert(`${type} generation initiated. Validating data integrity...`);
+      toast.success(`${type} generation initiated. Validating data integrity...`);
     } finally {
       setGenerating(null);
     }
   };
 
+  const categories = ["All Documents", "Case Initiation", "Investigation", "Cyber / Financial", "Court Filings"];
+
+  const documents = [
+    { id: "fir", title: t.doc_fir_title || "First Information Report (FIR)", category: "Case Initiation", desc: "Formulates the initial formal complaint citing specific BNS and IT Act penal sections (e.g. Sec 318 BNS).", icon: ClipboardList, color: "#1D4ED8", badgeColor: "bg-blue-600" },
+    { id: "sec94", title: t.doc_sec94_title || "Section 94 BNSS Notice", category: "Investigation", desc: "Drafts official data preservation and log production notices for ISPs, Telecoms, Banks, and Meta.", icon: FileSearch, color: "#10b981", badgeColor: "bg-emerald-600" },
+    { id: "freeze", title: t.doc_freeze_title || "Bank Account Freeze Order (Sec 106)", category: "Cyber / Financial", desc: "Generates urgent freeze requests for nodal bank officers to block fraudulent UPI wallets and mule accounts.", icon: ShieldAlert, color: "#ef4444", badgeColor: "bg-red-600" },
+    { id: "seizure", title: t.doc_seizure_title || "Seizure Memo / Panchnama", category: "Investigation", desc: "Formally logs digital evidence, hard drives, and mobile phones seized at the crime scene with SHA-256 hashes.", icon: Database, color: "#10b981", badgeColor: "bg-emerald-600" },
+    { id: "arrest", title: t.doc_arrest_title || "Arrest Memo & Sec 35 BNSS Notice", category: "Investigation", desc: "Formats official arrest memos or mandatory appearance notices (formerly Sec 41A) for suspects.", icon: UserCog, color: "#10b981", badgeColor: "bg-emerald-600" },
+    { id: "remand", title: t.doc_remand_title || "Remand Application", category: "Court Filings", desc: "Drafts a request for police custody articulating compelling investigative grounds and pending evidence recovery.", icon: Scale, color: "#D4A017", badgeColor: "bg-amber-600" },
+    { id: "chargesheet", title: t.doc_chargesheet_title || "Official Chargesheet (Sec 193 BNSS)", category: "Court Filings", desc: "Compiles a comprehensive final report detailing witnesses, forensic reports, and penal charges for trial.", icon: ScrollText, color: "#D4A017", badgeColor: "bg-amber-600" },
+    { id: "bail_opp", title: t.doc_bail_opp_title || "Bail Opposition / Reply", category: "Court Filings", desc: "Formulates strong legal arguments and criminal precedent citations to contest suspect bail applications in court.", icon: ShieldCheck, color: "#D4A017", badgeColor: "bg-amber-600" },
+    { id: "search_warrant", title: t.doc_search_warrant_title || "Search Warrant Application", category: "Court Filings", desc: "Drafts a judicial request to authorize the search of physical premises or encrypted digital cloud storage.", icon: Search, color: "#D4A017", badgeColor: "bg-amber-600" }
+  ];
+
+  const filteredDocs = documents.filter(doc => {
+    const matchesSearch = doc.title.toLowerCase().includes(searchQuery.toLowerCase()) || doc.desc.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCategory = activeCategory === "All Documents" || doc.category === activeCategory;
+    return matchesSearch && matchesCategory;
+  });
+
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-6 anim-fadeup" style={{ scrollbarWidth: "none" }}>
-      <div className="mb-2">
-        <h2 className="text-xl font-bold text-white font-['Outfit']">Document Generation</h2>
-        <p className="text-sm font-['DM_Sans']" style={{ color: "#93A5C8" }}>AI-automated legal document drafting based on BNS statutes.</p>
+    <div className="flex-1 overflow-y-auto p-6 pb-24 space-y-6 anim-fadeup" style={{ scrollbarWidth: "none" }}>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white font-['Outfit']">Document Generation Suite</h2>
+          <p className="text-sm font-['DM_Sans']" style={{ color: "var(--secondary-foreground)" }}>AI-automated legal document drafting compliant with BNS, BNSS, and IT Act.</p>
+        </div>
+        <div className="relative w-full md:w-64">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input 
+            type="text" 
+            placeholder="Search templates..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="w-full bg-slate-50 dark:bg-[#0B132B]/50 border rounded-xl pl-9 pr-4 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all font-['DM_Sans']"
+            style={{ borderColor: "rgba(94,115,153,0.3)" }}
+          />
+        </div>
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {[
-          { id: "chargesheet", title: "Official Chargesheet", desc: "Generates a complete drafting of charges citing applicable BNS & IT Act provisions.", icon: ScrollText, color: "#1D4ED8" },
-          { id: "remand", title: "Remand Application", desc: "Drafts a request for police custody with articulated legal grounds.", icon: ClipboardList, color: "#D4A017" },
-          { id: "seizure", title: "Seizure Memo", desc: "Formally logs digital and physical evidence collected at the scene.", icon: FileText, color: "#10b981" }
-        ].map(doc => (
-          <div key={doc.id} className="rounded-2xl border p-6 flex flex-col relative overflow-hidden group transition-all hover:-translate-y-1" style={{ background: "rgba(11,21,48,0.7)", borderColor: "rgba(212,160,23,0.15)", backdropFilter: "blur(12px)" }}>
+      <div className="flex items-center gap-2 overflow-x-auto pb-2" style={{ scrollbarWidth: "none" }}>
+        {categories.map(cat => (
+          <button 
+            key={cat} 
+            onClick={() => setActiveCategory(cat)}
+            className={`whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-semibold transition-all font-['DM_Sans'] ${
+              activeCategory === cat 
+                ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                : "bg-slate-800/50 hover:bg-slate-800 text-slate-300 border border-slate-700/50"
+            }`}
+          >
+            {cat}
+          </button>
+        ))}
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pt-2">
+        {filteredDocs.map(doc => (
+          <div key={doc.id} className="rounded-xl border p-6 flex flex-col justify-between min-h-[280px] relative overflow-hidden group transition-all hover:-translate-y-1 bg-[#1C2541]/80 dark:bg-[#0B132B] border-slate-200 dark:border-slate-800 hover:border-slate-600" style={{ backdropFilter: "blur(12px)", boxShadow: "0 4px 20px rgba(0,0,0,0.1)" }}>
             <div className="absolute top-0 right-0 w-32 h-32 opacity-10 translate-x-1/3 -translate-y-1/3 rounded-full blur-xl transition-all group-hover:opacity-20" style={{ background: doc.color }} />
             
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-4" style={{ background: `${doc.color}20`, border: `1px solid ${doc.color}40`, color: doc.color }}>
-              <doc.icon size={24} />
+            <div className="flex justify-between items-start mb-4">
+              <div className="w-12 h-12 rounded-xl flex items-center justify-center relative z-10" style={{ background: `${doc.color}15`, border: `1px solid ${doc.color}30`, color: doc.color }}>
+                <doc.icon size={24} />
+              </div>
+              <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide text-white uppercase relative z-10 ${doc.badgeColor} bg-opacity-90 shadow-sm`}>
+                {doc.category}
+              </span>
             </div>
-            <h3 className="text-lg font-bold text-white font-['Outfit'] mb-2">{doc.title}</h3>
-            <p className="text-sm leading-relaxed mb-6 flex-1 font-['DM_Sans']" style={{ color: "#93A5C8" }}>{doc.desc}</p>
             
-            <button onClick={() => handleGenerate(doc.title)} disabled={generating !== null} className="relative z-10 w-full flex items-center justify-center gap-2 py-3 rounded-xl transition-all text-sm font-bold disabled:opacity-50" style={{ background: "rgba(15,30,61,0.8)", border: "1px solid rgba(212,160,23,0.3)", color: "#EEF2FF" }}>
-              {generating === doc.title ? <Cpu size={16} className="animate-spin" /> : <DownloadCloud size={16} />}
-              {generating === doc.title ? "Generating AI Draft..." : "Generate & Download"}
+            <h3 className="text-base font-bold text-slate-900 dark:text-white font-['Outfit'] mb-2 relative z-10">{doc.title}</h3>
+            <p className="text-xs leading-relaxed mb-6 flex-1 font-['DM_Sans'] opacity-80" style={{ color: "var(--secondary-foreground)" }}>{doc.desc}</p>
+            
+            <button 
+              onClick={() => handleGenerate(doc.id, doc.title)} 
+              disabled={generating !== null} 
+              className="mt-auto relative z-10 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg transition-all text-xs font-bold disabled:opacity-50 hover:shadow-lg hover:shadow-blue-500/20 hover:border-blue-500 group-hover:bg-blue-600/10 group-hover:text-blue-400 group-hover:border-blue-500/30" 
+              style={{ background: "rgba(15,30,61,0.5)", border: "1px solid rgba(212,160,23,0.2)", color: "var(--foreground)" }}
+            >
+              {generating === doc.title ? <Loader2 size={15} className="animate-spin text-blue-400" /> : <FileText size={15} className="group-hover:text-blue-400 transition-colors" />}
+              {generating === doc.title ? "Generating AI Draft..." : (t.generate_download || "Generate & Download")}
             </button>
           </div>
         ))}
+        {filteredDocs.length === 0 && (
+          <div className="col-span-full py-12 text-center flex flex-col items-center">
+            <FileSearch size={48} className="text-slate-600 mb-4 opacity-50" />
+            <p className="text-slate-400 font-mono">No documents found matching your search.</p>
+          </div>
+        )}
       </div>
+
+      <FIRModal isOpen={isFIRModalOpen} onClose={() => setIsFIRModalOpen(false)} />
+      <Sec94Modal isOpen={isSec94ModalOpen} onClose={() => setIsSec94ModalOpen(false)} user={user} />
+      <Sec106Modal isOpen={isSec106ModalOpen} onClose={() => setIsSec106ModalOpen(false)} user={user} />
+      <SeizureMemoModal isOpen={isSeizureModalOpen} onClose={() => setIsSeizureModalOpen(false)} user={user} />
+      <ArrestMemoModal isOpen={isArrestModalOpen} onClose={() => setIsArrestModalOpen(false)} user={user} />
+      <RemandApplicationModal isOpen={isRemandModalOpen} onClose={() => setIsRemandModalOpen(false)} user={user} />
+      <ChargesheetModal isOpen={isChargesheetModalOpen} onClose={() => setIsChargesheetModalOpen(false)} user={user} />
+      <BailOppositionModal isOpen={isBailModalOpen} onClose={() => setIsBailModalOpen(false)} user={user} />
+      <SearchWarrantModal isOpen={isWarrantModalOpen} onClose={() => setIsWarrantModalOpen(false)} user={user} />
     </div>
   );
 }
 
 // ─── Evidence Locker View ─────────────────────────────────────────────────────
 
-function EvidenceView() {
+function EvidenceView({ evidence = [], cases = [], user, onEvidenceUploaded, onEvidenceDeleted }: { evidence?: any[], cases?: CaseData[], user: AuthUser, onEvidenceUploaded: (ev: any) => void, onEvidenceDeleted?: (id: string) => void }) {
+  const { t } = useTranslation();
   const [dragging, setDragging] = useState(false);
-  const [evidence, setEvidence] = useState<any[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [viewMode, setViewMode] = useState<"table" | "grid">("table");
+  
+  const [isTaggingModalOpen, setIsTaggingModalOpen] = useState(false);
+  const [droppedFile, setDroppedFile] = useState<File | null>(null);
+  const [fileHash, setFileHash] = useState<string>("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { fetchEvidence(); }, []);
+  const calculateSHA256 = async (file: File): Promise<string> => {
+    const buffer = await file.arrayBuffer();
+    const hashBuffer = await window.crypto.subtle.digest('SHA-256', buffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  };
 
-  async function fetchEvidence() {
-    const { data } = await supabase.from('evidence_metadata').select('*').order('upload_date', { ascending: false });
-    if (data) setEvidence(data);
-  }
+  const handleDownloadEvidence = (url: string, fileName: string) => {
+    window.open(url, '_blank');
+  };
 
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(false);
-    if (!e.dataTransfer.files || e.dataTransfer.files.length === 0) return;
-    
-    const file = e.dataTransfer.files[0];
-    setUploading(true);
-    
+  const handleDeleteEvidence = async (evidenceId: string, fileUrl: string) => {
+    const confirmed = window.confirm("WARNING: Are you sure you want to delete this evidence? This action removes the file from the secure vault and breaks the chain of custody. This cannot be undone.");
+    if (!confirmed) return;
+
     try {
-      const buffer = await file.arrayBuffer();
-      const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      const sha256_hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-      
-      const { data: { user } } = await supabase.auth.getUser();
-      const filename = `${Date.now()}_${file.name}`;
-      
-      const { error: uploadError } = await supabase.storage.from('evidence_locker').upload(filename, file);
-      if (uploadError) throw uploadError;
-      
-      const { error: dbError } = await supabase.from('evidence_metadata').insert([{
-         filename: file.name,
-         file_size: (file.size / (1024*1024)).toFixed(2) + " MB",
-         sha256_hash,
-         user_id: user?.id || null
-      }]);
+      const urlParts = fileUrl.split('/evidence-vault/');
+      if (urlParts.length > 1) {
+        const filePath = urlParts[1];
+        const { error: storageError } = await supabase.storage
+          .from('evidence-vault')
+          .remove([filePath]);
+        if (storageError) console.error("Storage deletion error:", storageError);
+      }
+
+      const { error: dbError } = await supabase
+        .from('evidence_metadata')
+        .delete()
+        .eq('id', evidenceId);
+
       if (dbError) throw dbError;
-      
-      fetchEvidence();
+
+      if (onEvidenceDeleted) {
+        onEvidenceDeleted(evidenceId);
+      }
+      toast.success("Evidence permanently deleted from the vault.");
+    } catch (error: any) {
+      console.error("Delete failed:", error);
+      toast.error(error.message || "Failed to delete evidence.");
+    }
+  };
+
+  const handleFileProcess = async (file: File) => {
+    setUploading(true);
+    try {
+      const sha256_hash = await calculateSHA256(file);
+      setDroppedFile(file);
+      setFileHash(sha256_hash);
+      setIsTaggingModalOpen(true);
     } catch (err: any) {
-      alert("Upload failed: " + err.message);
+      toast.error("Hashing failed: " + err.message);
     } finally {
       setUploading(false);
     }
   };
 
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    if (!e.dataTransfer.files || e.dataTransfer.files.length === 0) return;
+    const file = e.dataTransfer.files[0];
+    await handleFileProcess(file);
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    await handleFileProcess(file);
+  };
+
+  const getCaseLabel = (caseId: string) => {
+    if (!caseId) return "Unlinked Evidence";
+    const linkedCase = cases.find(c => c.id === caseId);
+    if (!linkedCase) return "Unlinked Evidence";
+    
+    const isUUID = (str: string) => str?.length === 36 && str?.includes('-');
+    // In our schema, id serves as fir_number. Use it if it's not a UUID.
+    if (linkedCase.id && !isUUID(linkedCase.id)) {
+      return `FIR #${linkedCase.id} — ${linkedCase.title}`;
+    }
+    return linkedCase.title || "Untitled Case";
+  };
+
   return (
-    <div className="flex-1 flex flex-col overflow-y-auto p-6 space-y-6 anim-fadeup" style={{ scrollbarWidth: "none" }}>
+    <div className="flex-1 flex flex-col overflow-y-auto p-6 pb-24 space-y-6 anim-fadeup" style={{ scrollbarWidth: "none" }}>
       <div className="mb-2">
-        <h2 className="text-xl font-bold text-white font-['Outfit']">Evidence Management Locker</h2>
-        <p className="text-sm font-['DM_Sans']" style={{ color: "#93A5C8" }}>Upload and secure digital evidence with cryptographic hashing.</p>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-white font-['Outfit']">Evidence Vault Command Center</h2>
+        <p className="text-sm font-['DM_Sans']" style={{ color: "var(--secondary-foreground)" }}>Sec 63 BSA Digital Integrity Lock - Real-time cryptographic hashing and chain of custody tracking.</p>
       </div>
 
-      <div className={`relative rounded-2xl border-2 border-dashed p-10 flex flex-col items-center justify-center transition-all ${dragging ? "scale-[1.02]" : ""}`}
-        style={{ borderColor: dragging ? "#D4A017" : "rgba(94,115,153,0.4)", background: dragging ? "rgba(212,160,23,0.05)" : "rgba(11,21,48,0.4)" }}
+      <div className={`relative rounded-2xl border-2 border-dashed p-10 flex flex-col items-center justify-center transition-all ${dragging ? "scale-[1.02] border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.3)]" : "border-slate-600 hover:border-blue-500"}`}
+        style={{ background: dragging ? "rgba(29,78,216,0.1)" : "rgba(28, 37, 65, 0.5)" }}
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}>
         
         {uploading && (
-           <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 backdrop-blur-sm rounded-2xl">
-              <span className="flex items-center justify-center gap-2 text-white font-bold">
-                 <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white" style={{ animation: "spin 0.7s linear infinite" }} />
-                 Securing Evidence...
+           <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 backdrop-blur-sm rounded-2xl">
+              <span className="flex items-center justify-center gap-3 text-emerald-400 font-bold font-mono">
+                 <Loader2 size={18} className="animate-spin" />
+                 Calculating SHA-256 forensic hash...
               </span>
            </div>
         )}
 
-        <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4" style={{ background: "rgba(94,115,153,0.1)", color: "#D4A017" }}>
-          <UploadCloud size={28} />
+        <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 transition-colors ${dragging ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-800 text-slate-400'}`}>
+          <UploadCloud size={28} className={dragging ? "animate-bounce" : ""} />
         </div>
-        <h3 className="text-lg font-semibold text-white mb-1 font-['Outfit']">Drag & Drop Evidence Files</h3>
-        <p className="text-sm mb-4 font-['DM_Sans']" style={{ color: "#5E7399" }}>Supports Images, Videos, PDFs, and PCAP archives.</p>
-        <button className="px-6 py-2.5 rounded-xl transition-all text-sm font-bold font-['Outfit']" style={{ background: "linear-gradient(135deg,#1D4ED8,#1e40af)", color: "white", boxShadow: "0 4px 15px rgba(29,78,216,0.3)" }}>
-          Browse Local Files
+        <h3 className="text-lg font-semibold text-white mb-1 font-['Outfit']">Drag & Drop cyber forensic files here</h3>
+        <p className="text-sm mb-5 font-['DM_Sans']" style={{ color: "var(--muted-foreground)" }}>Disk Images, PCAPs, Bank Statements, Screenshots, or Memory Dumps</p>
+        
+        <input 
+          type="file" 
+          ref={fileInputRef} 
+          className="hidden" 
+          onChange={handleFileSelect} 
+        />
+        <button 
+          onClick={() => fileInputRef.current?.click()}
+          className="px-6 py-2.5 rounded-xl transition-all text-sm font-bold font-['Outfit'] hover:scale-105" 
+          style={{ background: "linear-gradient(135deg,#1D4ED8,#1e40af)", color: "white", boxShadow: "0 4px 15px rgba(29,78,216,0.3)" }}
+        >
+          Browse Files
         </button>
       </div>
 
-      <div className="rounded-2xl border overflow-hidden" style={{ background: "rgba(11,21,48,0.7)", borderColor: "rgba(212,160,23,0.15)" }}>
-        <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: "rgba(212,160,23,0.1)" }}>
-          <ShieldCheck size={16} style={{ color: "#10b981" }} />
-          <h3 className="text-sm font-semibold text-white font-['Outfit']">Secured Chain of Custody</h3>
-        </div>
-        <div className="divide-y" style={{ borderColor: "rgba(212,160,23,0.06)" }}>
-          {evidence.length === 0 ? (
-            <div className="p-8 text-center text-xs font-mono" style={{ color: "#5E7399" }}>
-              No evidence uploaded yet
+      <div className="w-full h-auto min-h-[600px] flex flex-col bg-[#1C2541]/30 border border-slate-800 rounded-2xl p-6 space-y-6 overflow-visible backdrop-blur-xl">
+        <div className="border-b border-slate-700/50 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <ShieldCheck size={18} className="text-emerald-400" />
+            <h3 className="text-base font-bold text-white font-['Outfit']">Secured Chain of Custody Repository</h3>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="relative w-48 hidden sm:block">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input type="text" placeholder="Search hash or file..." className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500" />
             </div>
-          ) : evidence.map((file, i) => (
-            <div key={i} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-5 py-4 hover:bg-slate-800/30 transition-all">
-              <div className="flex items-center gap-4 min-w-0">
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ background: "rgba(212,160,23,0.1)", border: "1px solid rgba(212,160,23,0.2)", color: "#D4A017" }}>
-                  <FileText size={18} />
+            <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-1">
+              <button onClick={() => setViewMode("table")} className={`p-1.5 rounded-md transition-colors ${viewMode === "table" ? "bg-slate-700 text-white" : "text-slate-400 hover:text-white"}`}><List size={14} /></button>
+              <button onClick={() => setViewMode("grid")} className={`p-1.5 rounded-md transition-colors ${viewMode === "grid" ? "bg-slate-700 text-white" : "text-slate-400 hover:text-white"}`}><LayoutGrid size={14} /></button>
+            </div>
+          </div>
+        </div>
+
+        {viewMode === "table" ? (
+          <div className="w-full overflow-x-auto overflow-y-auto border border-slate-800 rounded-xl bg-[#1C2541]/40 custom-scrollbar p-1">
+            <table className="w-full text-left border-collapse min-w-[800px]">
+              <thead>
+                <tr className="bg-slate-800/50 border-b border-slate-700 text-xs font-mono text-slate-400">
+                  <th className="px-5 py-3 font-medium">Case ID</th>
+                  <th className="px-5 py-3 font-medium">File Name</th>
+                  <th className="px-5 py-3 font-medium">Category</th>
+                  <th className="px-5 py-3 font-medium">Brief Description</th>
+                  <th className="px-5 py-3 font-medium">SHA-256 Hash</th>
+                  <th className="px-5 py-3 font-medium text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700/50">
+                {evidence.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-12 text-center text-slate-400 font-mono text-sm">No evidence secured yet.</td>
+                  </tr>
+                ) : evidence.map((file, i) => (
+                  <tr key={i} className="hover:bg-slate-800/30 transition-colors">
+                    <td className="px-5 py-3 text-xs font-mono text-blue-400">
+                      <p className="text-xs font-medium text-blue-400">
+                        📁 {getCaseLabel(file.case_id)}
+                      </p>
+                    </td>
+                    <td className="px-5 py-3 text-sm font-medium text-white max-w-[200px] truncate">{file.filename}</td>
+                    <td className="px-5 py-3">
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-slate-600 bg-slate-800 text-slate-300 truncate max-w-[150px] inline-block">{file.category || 'Untagged'}</span>
+                    </td>
+                    <td className="px-5 py-3 max-w-[250px]">
+                      {file.notes && (
+                        <p className="text-xs text-slate-300 line-clamp-2 bg-slate-900/50 p-2 rounded border border-slate-800/60">
+                          📝 {file.notes}
+                        </p>
+                      )}
+                    </td>
+                    <td className="px-5 py-3">
+                      <span className="text-xs font-mono px-2 py-0.5 rounded flex items-center gap-1.5 bg-emerald-900/20 text-emerald-400 border border-emerald-900/50">
+                        <Lock size={10} /> {file.sha256_hash?.substring(0, 24)}...
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <div className="flex items-center justify-end space-x-3">
+                        <button 
+                          onClick={() => handleDownloadEvidence(file.file_url, file.filename)}
+                          className="p-2 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 hover:text-blue-300 rounded-lg transition-colors group relative"
+                          title="Download Evidence"
+                        >
+                          <Download className="w-4 h-4" />
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteEvidence(file.id, file.file_url)}
+                          className="p-2 bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300 rounded-lg transition-colors group relative"
+                          title="Delete Evidence"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-900/50">
+            {evidence.length === 0 ? (
+              <div className="col-span-full py-8 text-center text-slate-400 font-mono text-sm">No evidence secured yet.</div>
+            ) : evidence.map((file, i) => (
+              <div key={i} className="bg-[#1C2541] border border-slate-700 rounded-xl p-4 flex flex-col hover:border-slate-500 transition-colors shadow-lg">
+                <div className="flex items-start justify-between mb-3">
+                  <div className="w-10 h-10 rounded-lg bg-blue-900/30 text-blue-400 flex items-center justify-center border border-blue-800/50">
+                    <FileText size={18} />
+                  </div>
+                  <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">{file.category || 'Evidence'}</span>
                 </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-white truncate font-['DM_Sans']">{file.filename}</p>
-                  <div className="flex items-center gap-3 mt-1">
-                    <span className="text-xs font-mono" style={{ color: "#5E7399" }}>{file.file_size}</span>
-                    <span className="text-xs font-mono px-2 py-0.5 rounded border flex items-center gap-1" style={{ background: "rgba(16,185,129,0.1)", color: "#10b981", borderColor: "rgba(16,185,129,0.2)" }}>
-                      <Lock size={10} /> SHA-256: {file.sha256_hash.substring(0, 16)}...
-                    </span>
+                <h4 className="text-sm font-bold text-white mb-1 truncate" title={file.filename}>{file.filename}</h4>
+                <p className="text-xs font-medium text-blue-400 mt-1 mb-2">
+                  📁 {getCaseLabel(file.case_id)}
+                </p>
+                {file.notes && (
+                  <p className="text-xs text-slate-300 mb-3 line-clamp-2 bg-slate-900/50 p-2 rounded border border-slate-800/60">
+                    📝 {file.notes}
+                  </p>
+                )}
+                <div className="mt-auto bg-slate-900 rounded p-2 border border-slate-800">
+                  <div className="flex items-center gap-1.5 text-[10px] font-mono text-emerald-500 mb-1">
+                    <ShieldCheck size={10} /> INTEGRITY VERIFIED
+                  </div>
+                  <p className="text-[10px] font-mono text-slate-400 truncate">{file.sha256_hash}</p>
+                </div>
+                <div className="flex justify-between items-center mt-3 pt-3 border-t border-slate-700/50 text-[10px] font-mono text-slate-500">
+                  <div className="flex flex-col">
+                    <span>{new Date(file.upload_date).toLocaleDateString()}</span>
+                    <span>{file.file_size}</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <button 
+                      onClick={() => handleDownloadEvidence(file.file_url, file.filename)}
+                      className="p-1.5 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 hover:text-blue-300 rounded-lg transition-colors"
+                      title="Download Evidence"
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
+                    <button 
+                      onClick={() => handleDeleteEvidence(file.id, file.file_url)}
+                      className="p-1.5 bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300 rounded-lg transition-colors"
+                      title="Delete Evidence"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-4 shrink-0">
-                <div className="text-right hidden sm:block">
-                  <p className="text-xs text-white font-['DM_Sans']">Uploaded</p>
-                  <p className="text-xs font-mono" style={{ color: "#5E7399" }}>{new Date(file.upload_date).toLocaleDateString()}</p>
-                </div>
-                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border" style={{ background: "rgba(16,185,129,0.05)", borderColor: "rgba(16,185,129,0.2)" }}>
-                  <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" style={{ boxShadow: "0 0 10px #10b981" }} />
-                  <span className="text-xs font-mono font-bold" style={{ color: "#10b981" }}>SECURE</span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
+
+      <EvidenceTaggingModal 
+        isOpen={isTaggingModalOpen}
+        onClose={() => setIsTaggingModalOpen(false)}
+        file={droppedFile}
+        fileHash={fileHash}
+        cases={cases}
+        user={user}
+        onSuccess={(newEv) => {
+           if (newEv) {
+             onEvidenceUploaded(newEv);
+           }
+           setDroppedFile(null);
+           setFileHash("");
+           setIsTaggingModalOpen(false);
+        }}
+      />
     </div>
   );
 }
@@ -1923,27 +2419,27 @@ function AuditView() {
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-6 anim-fadeup" style={{ scrollbarWidth: "none" }}>
       <div className="mb-2">
-        <h2 className="text-xl font-bold text-white font-['Outfit']">Digital Case Diary</h2>
-        <p className="text-sm font-['DM_Sans']" style={{ color: "#93A5C8" }}>Chronological system audit and case progression timeline.</p>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-white font-['Outfit']">Digital Case Diary</h2>
+        <p className="text-sm font-['DM_Sans']" style={{ color: "var(--secondary-foreground)" }}>Chronological system audit and case progression timeline.</p>
       </div>
 
-      <div className="rounded-2xl border p-8" style={{ background: "rgba(11,21,48,0.7)", borderColor: "rgba(212,160,23,0.15)", backdropFilter: "blur(12px)" }}>
-        <div className="relative border-l-2 ml-4 md:ml-6 space-y-8" style={{ borderColor: "rgba(212,160,23,0.2)" }}>
+      <div className="rounded-2xl border p-8 bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{backdropFilter: "blur(12px)"}}>
+        <div className="relative border-l-2 ml-4 md:ml-6 space-y-8" style={{ borderColor: "var(--border)" }}>
           {[
             { title: "Chargesheet Drafted", desc: "Automated chargesheet generated for Case ACCB-2024-0847 citing BNS Sec 318, 319.", time: "Today, 14:28", icon: FileText, color: "#1D4ED8" },
             { title: "AI Legal Analysis Completed", desc: "Narrative parsed. Severity assessed as HIGH. 3 Entities extracted.", time: "Today, 14:22", icon: Cpu, color: "#D4A017" },
             { title: "Evidence Hashed", desc: "Suspect_Mobile_Extraction.zip secured with SHA-256 integrity lock.", time: "Yesterday, 18:45", icon: ShieldCheck, color: "#10b981" },
-            { title: "FIR Submitted", desc: "Initial complaint logged into the precinct registry by IO Rahul Sharma.", time: "Oct 24, 09:15", icon: ClipboardList, color: "#5E7399" }
+            { title: "FIR Submitted", desc: "Initial complaint logged into the precinct registry by IO Rahul Sharma.", time: "Oct 24, 09:15", icon: ClipboardList, color: "var(--muted-foreground)" }
           ].map((ev, i) => (
             <div key={i} className="relative pl-8 md:pl-10 group">
-              <div className="absolute -left-[17px] md:-left-[17px] top-1 w-8 h-8 rounded-full border-4 flex items-center justify-center transition-all group-hover:scale-110" style={{ background: "#0B1530", borderColor: ev.color, color: ev.color }}>
+              <div className="absolute -left-[17px] md:-left-[17px] top-1 w-8 h-8 rounded-full border-4 flex items-center justify-center transition-all group-hover:scale-110 bg-white dark:bg-[#1C2541] border-slate-200 dark:border-slate-200 dark:border-slate-800" style={{borderColor: ev.color, color: ev.color}}>
                 <ev.icon size={12} />
               </div>
               <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-1">
-                <h3 className="text-base font-bold text-white font-['Outfit']">{ev.title}</h3>
-                <span className="text-xs font-mono" style={{ color: "#5E7399" }}>{ev.time}</span>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white font-['Outfit']">{ev.title}</h3>
+                <span className="text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>{ev.time}</span>
               </div>
-              <p className="text-sm leading-relaxed font-['DM_Sans']" style={{ color: "#93A5C8" }}>{ev.desc}</p>
+              <p className="text-sm leading-relaxed font-['DM_Sans']" style={{ color: "var(--secondary-foreground)" }}>{ev.desc}</p>
             </div>
           ))}
         </div>
@@ -1955,14 +2451,13 @@ function AuditView() {
 // ─── Placeholder View ─────────────────────────────────────────────────────────
 
 function PlaceholderView({ id }: { id: NavId }) {
+  const { t } = useTranslation();
   const cfg: Record<string, { icon: React.ElementType; title: string; desc: string }> = {
     evidence:      { icon: ScanLine,     title: "Evidence Vault",       desc: "Manage digital evidence with SHA-256 chain of custody verification" },
     legal:         { icon: Scale,        title: "Legal Intelligence",   desc: "IPC, IT Act, and PMLA reference with AI-powered legal analysis" },
     documents:     { icon: ScrollText,   title: "Documents",            desc: "Auto-generated FIRs, chargesheets, and remand applications" },
-    users:         { icon: Users,        title: "User Management",      desc: "Manage officer accounts, roles, and access permissions" },
     analytics:     { icon: TrendingUp,   title: "Analytics",            desc: "Case trends, resolution rates, and departmental statistics" },
     audit:         { icon: FileSearch,   title: "Audit Logs",           desc: "Complete audit trail of all system access and modifications" },
-    notifications: { icon: Bell,         title: "Notifications",        desc: "Case updates, alerts, and system notifications" },
     settings:      { icon: Settings,     title: "System Settings",      desc: "Configure CrimeGPT platform settings and integrations" },
   };
   const c = cfg[id] ?? { icon: Layers, title: "Section", desc: "Coming soon" };
@@ -1972,16 +2467,16 @@ function PlaceholderView({ id }: { id: NavId }) {
     <div className="flex-1 flex items-center justify-center p-6">
       <div className="text-center space-y-4 max-w-sm">
         <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto"
-          style={{ background: "rgba(212,160,23,0.1)", border: "1px solid rgba(212,160,23,0.2)" }}>
+          style={{ background: "var(--border)", border: "1px solid rgba(212,160,23,0.2)" }}>
           <Icon size={28} style={{ color: "#D4A017", opacity: 0.7 }} />
         </div>
         <div>
-          <h3 className="text-lg font-semibold text-white font-['Outfit']">{c.title}</h3>
-          <p className="text-sm mt-1 font-['DM_Sans']" style={{ color: "#5E7399" }}>{c.desc}</p>
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white font-['Outfit']">{c.title}</h3>
+          <p className="text-sm mt-1 font-['DM_Sans']" style={{ color: "var(--muted-foreground)" }}>{c.desc}</p>
         </div>
         <div className="flex flex-wrap justify-center gap-2">
-          <SecBadge icon={Lock} label="Access Controlled" />
-          <SecBadge icon={ShieldCheck} label="Audit Logged" />
+          <SecBadge icon={Lock} label={t("Access Controlled") || "Access Controlled"} />
+          <SecBadge icon={ShieldCheck} label={t("Audit Logged") || "Audit Logged"} />
         </div>
       </div>
     </div>
@@ -1990,35 +2485,42 @@ function PlaceholderView({ id }: { id: NavId }) {
 
 // ─── Mobile Drawer ────────────────────────────────────────────────────────────
 
-function MobileDrawer({ user, active, onNav, open, onClose }: {
-  user: AuthUser; active: NavId; onNav: (v: NavId) => void; open: boolean; onClose: () => void;
+function MobileDrawer({ user, active, onNav, open, onClose, isAnalyzing = false }: {
+  user: AuthUser; active: NavId; onNav: (v: NavId) => void; open: boolean; onClose: () => void; isAnalyzing?: boolean;
 }) {
   if (!open) return null;
-  const navItems = ALL_NAV.filter(n => ROLE_NAV[user.role].includes(n.id));
+  const allowedTabIds = ROLE_PERMISSIONS[user.role] || ROLE_PERMISSIONS['Investigating Officer'];
+  const navItems = ALL_NAV.filter(n => allowedTabIds.includes(n.id));
   return (
     <>
       <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <aside className="fixed inset-y-0 left-0 z-50 w-64 flex flex-col border-r"
-        style={{ background: "#050E22", borderColor: "rgba(212,160,23,0.15)" }}>
-        <div className="flex items-center justify-between px-4 py-4 border-b" style={{ borderColor: "rgba(212,160,23,0.12)" }}>
+        style={{ background: "var(--sidebar)", borderColor: "var(--border)" }}>
+        <div className="flex items-center justify-between px-4 py-4 border-b" style={{ borderColor: "var(--sidebar-border)" }}>
           <div className="flex items-center gap-2.5">
             <LogoMark size={32} />
-            <span className="text-sm font-bold text-white font-['Outfit']">Crime<span style={{ color: "#D4A017" }}>GPT</span></span>
+            <span className="text-sm font-bold text-slate-900 dark:text-white font-['Outfit']">Crime<span style={{ color: "#D4A017" }}>GPT</span></span>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg transition-colors" style={{ color: "#5E7399" }}><X size={16} /></button>
+          <button onClick={onClose} className="p-1.5 rounded-lg transition-colors" style={{ color: "var(--muted-foreground)" }}><X size={16} /></button>
         </div>
         <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto" style={{ scrollbarWidth: "none" }}>
           {navItems.map(({ id, label, icon: Icon, badge }) => (
-            <button key={id} onClick={() => { onNav(id); onClose(); }}
+            <button key={id} type="button" onClick={(e) => { e.preventDefault(); onNav(id); onClose(); }}
               className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm transition-all"
               style={{
-                background: active === id ? "rgba(212,160,23,0.12)" : "transparent",
-                color: active === id ? "#D4A017" : "#93A5C8",
+                background: active === id ? "var(--sidebar-border)" : "transparent",
+                color: active === id ? "#D4A017" : "var(--secondary-foreground)",
                 border: `1px solid ${active === id ? "rgba(212,160,23,0.3)" : "transparent"}`,
               }}>
               <Icon size={15} />
               <span className="font-['DM_Sans'] flex-1 text-left">{label}</span>
-              {badge && <span className="text-xs font-mono px-1.5 py-0.5 rounded" style={{ background: "#0F1E3D", color: "#5E7399" }}>{badge}</span>}
+              {badge && <span className="text-xs font-mono px-1.5 py-0.5 rounded" style={{ background: "var(--secondary)", color: "var(--muted-foreground)" }}>{badge}</span>}
+              {id === "investigation" && isAnalyzing && (
+                <span title="AI Copilot Active: Running Background Forensic Analysis..." className="ml-auto text-xs font-mono px-1.5 py-0.5 rounded border flex items-center justify-center animate-pulse"
+                  style={{ background: "rgba(212,160,23,0.1)", color: "#D4A017", borderColor: "rgba(212,160,23,0.3)" }}>
+                  <Loader2 size={12} className="animate-spin" />
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -2030,75 +2532,395 @@ function MobileDrawer({ user, active, onNav, open, onClose }: {
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
 function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
-  const defaultNav = (ROLE_NAV[user.role][0] ?? "dashboard") as NavId;
-  const [active, setActive] = useState<NavId>(defaultNav);
+  const defaultNav = (ROLE_PERMISSIONS[user.role]?.[0] ?? "dashboard") as NavId;
+  const [active, setActive] = useState<NavId>(() => {
+    return (sessionStorage.getItem('crimegpt_active_tab') as NavId) || defaultNav;
+  });
+  
+  const handleNavChange = (tab: NavId) => {
+    setActive(tab);
+    sessionStorage.setItem('crimegpt_active_tab', tab);
+  };
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { i18n } = useTranslation();
+
+  useEffect(() => {
+    const fetchGlobalLanguage = async () => {
+      const { data, error } = await supabase
+        .from('system_settings')
+        .select('default_language')
+        .eq('id', 1)
+        .single();
+  
+      if (data && data.default_language) {
+        i18n.changeLanguage(data.default_language);
+      }
+    };
+    fetchGlobalLanguage();
+  }, []);
+
+  // Global AI Investigation State
+  const [investigationInput, setInvestigationInput] = useState("");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<any>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+
+  // Global Data State
+  const [cases, setCases] = useState<CaseData[]>([]);
+  const [evidence, setEvidence] = useState<any[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+
+  useEffect(() => {
+    async function fetchInitialData() {
+      setIsLoadingData(true);
+      const [casesRes, evidenceRes] = await Promise.all([
+        supabase.from('cases').select('*').order('date', { ascending: false }),
+        supabase.from('evidence_metadata').select('*').order('upload_date', { ascending: false })
+      ]);
+      if (casesRes.data) setCases(casesRes.data as CaseData[]);
+      if (evidenceRes.data) setEvidence(evidenceRes.data);
+      setIsLoadingData(false);
+    }
+    fetchInitialData();
+
+    // Supabase Realtime Subscriptions
+    const casesSub = supabase.channel('public:cases')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cases' }, (payload) => {
+        if (payload.eventType === 'INSERT') {
+          setCases(prev => {
+            if (prev.some(c => c.id === payload.new.id)) return prev;
+            return [payload.new as CaseData, ...prev];
+          });
+        } else if (payload.eventType === 'UPDATE') {
+          setCases(prev => prev.map(c => c.id === payload.new.id ? (payload.new as CaseData) : c));
+        } else if (payload.eventType === 'DELETE') {
+          setCases(prev => prev.filter(c => c.id !== payload.old.id));
+        }
+      })
+      .subscribe();
+
+    const evidenceSub = supabase.channel('public:evidence_metadata')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'evidence_metadata' }, (payload) => {
+        if (payload.eventType === 'INSERT') {
+          setEvidence(prev => [payload.new, ...prev]);
+        } else if (payload.eventType === 'UPDATE') {
+          setEvidence(prev => prev.map(e => e.id === payload.new.id ? payload.new : e));
+        } else if (payload.eventType === 'DELETE') {
+          setEvidence(prev => prev.filter(e => e.id !== payload.old.id));
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(casesSub);
+      supabase.removeChannel(evidenceSub);
+    };
+  }, []);
+
+  async function analyzeCase() {
+    if (!investigationInput.trim()) return;
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+    setAnalysisResult(null); // Clear previous results for fresh streaming
+    try {
+      const response = await fetch("http://localhost:8000/api/v1/analyze-case", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ complaint_text: investigationInput, language: i18n.language })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder("utf-8");
+      
+      let rawJsonString = "";
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value, { stream: true });
+          
+          // Parse SSE lines
+          const lines = chunk.split("\n");
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.error) {
+                  setAnalysisError(data.error);
+                  break;
+                }
+                if (data.text) {
+                  rawJsonString += data.text;
+                  try {
+                    // Progressively parse partial JSON
+                    const repairedJson = jsonrepair(rawJsonString);
+                    const parsedData = JSON.parse(repairedJson);
+                    setAnalysisResult(parsedData);
+                  } catch (e) {
+                    // Ignore jsonrepair parse errors on heavily incomplete chunks
+                  }
+                }
+              } catch (e) {
+                console.error("Error parsing SSE data line", e);
+              }
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error(err);
+      setAnalysisError("Failed to analyze the case narrative. Ensure backend is running.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }
 
   const views: Partial<Record<NavId, React.ReactNode>> = {
-    dashboard:     <DashboardView user={user} />,
-    investigation: <InvestigationView />,
-    cases:         <CasesView />,
+    dashboard:     <DashboardView user={user} cases={cases} evidence={evidence} isLoadingData={isLoadingData} />,
+    investigation: <AIInvestigation />,
+    cases:         <CasesView 
+                     cases={cases} 
+                     onCaseCreated={c => setCases(prev => [c, ...prev])} 
+                     onCaseUpdated={c => setCases(prev => prev.map(old => old.id === c.id ? c : old))}
+                     onCaseDeleted={id => setCases(prev => prev.filter(c => c.id !== id))}
+                   />,
     reports:       <ReportsView />,
-    documents:     <DocumentsView />,
-    evidence:      <EvidenceView />,
+    documents:     <DocumentsView user={user} />,
+    evidence:      <EvidenceView evidence={evidence} cases={cases} user={user} onEvidenceUploaded={(ev) => setEvidence(prev => [ev, ...prev])} onEvidenceDeleted={(id) => setEvidence(prev => prev.filter(e => e.id !== id))} />,
+    users:         <UserManagement user={user} />,
+    settings:      <SystemSettings user={user} />,
+    logbook:       <Logbook user={user} />,
     audit:         <AuditView />,
-    analytics:     <DashboardView user={user} />,
+    analytics:     <DashboardView user={user} cases={cases} evidence={evidence} isLoadingData={isLoadingData} />,
   };
 
   return (
     <div className="size-full flex overflow-hidden"
       style={{
-        background: "#060B18",
+        background: "var(--background)",
         backgroundImage: "radial-gradient(ellipse 80% 50% at 50% -5%, rgba(29,78,216,0.08) 0%, transparent 70%)",
       }}>
       <style>{STYLES}</style>
       <div className="hidden md:flex">
-        <Sidebar user={user} active={active} onNav={setActive} collapsed={collapsed} onCollapse={() => setCollapsed(v => !v)} />
+        <Sidebar user={user} active={active} onNav={handleNavChange} collapsed={collapsed} onCollapse={() => setCollapsed(v => !v)} isAnalyzing={isAnalyzing} />
       </div>
-      <MobileDrawer user={user} active={active} onNav={setActive} open={mobileOpen} onClose={() => setMobileOpen(false)} />
+      <MobileDrawer user={user} active={active} onNav={handleNavChange} open={mobileOpen} onClose={() => setMobileOpen(false)} isAnalyzing={isAnalyzing} />
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        <Topbar user={user} active={active} onMenuToggle={() => setMobileOpen(true)} onLogout={onLogout} onNav={setActive} />
-        <div className="flex-1 flex overflow-hidden">
-          {views[active] ?? <PlaceholderView id={active} />}
-        </div>
+        <Topbar user={user} active={active} onMenuToggle={() => setMobileOpen(true)} onLogout={onLogout} onNav={handleNavChange} />
+        <main className="flex-1 w-full min-h-screen h-auto overflow-y-auto overflow-x-hidden custom-scrollbar">
+          {(() => {
+            const allowedTabIds = ROLE_PERMISSIONS[user.role] || ROLE_PERMISSIONS['Investigating Officer'];
+            if (!allowedTabIds.includes(active)) {
+              return (
+                <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-6 space-y-4">
+                  <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-full text-red-400">
+                    <ShieldAlert className="w-12 h-12" />
+                  </div>
+                  <h2 className="text-xl font-bold text-slate-100">Access Restricted</h2>
+                  <p className="text-slate-400 max-w-md">
+                    Your current role (<span className="text-amber-400 font-semibold">{user.role}</span>) does not have authorization to access the {active} module.
+                  </p>
+                  <button 
+                    onClick={() => handleNavChange('dashboard')}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg transition"
+                  >
+                    Return to Dashboard
+                  </button>
+                </div>
+              );
+            }
+            return views[active] ?? <PlaceholderView id={active} />;
+          })()}
+        </main>
       </div>
+      <FloatingChatbot />
     </div>
   );
+}
+
+class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError: boolean, error: any }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Dashboard Render Error:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-screen w-screen flex flex-col items-center justify-center p-6 text-slate-900 dark:text-white" style={{ background: "var(--background)" }}>
+          <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-6 max-w-md w-full">
+            <h2 className="text-xl font-bold mb-2">System Error Encountered</h2>
+            <p className="text-sm font-mono opacity-80 mb-4">{this.state.error?.message || "Unknown rendering error"}</p>
+            <div className="flex gap-3">
+              <button onClick={() => window.location.reload()} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm transition-colors hover:bg-blue-700">
+                Reload Session
+              </button>
+              <button onClick={() => { localStorage.clear(); sessionStorage.clear(); window.location.href = '/'; }} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm transition-colors hover:bg-red-700">
+                Sign Out & Reset Session
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 // ─── App Root ─────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const userRef = useRef<AuthUser | null>(null);
   const [authPage, setAuthPage] = useState<AuthPage>("login");
   const [sessionLoading, setSessionLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }: any) => {
-      if (session) setUser(session.user.user_metadata as AuthUser);
-      setSessionLoading(false);
-    });
+    userRef.current = user;
+  }, [user]);
+  const [theme, setTheme] = useState<'light' | 'dark'>('dark');
+  const [language, setLanguage] = useState(localStorage.getItem('crimegpt_language') || 'en');
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
-      setUser(session?.user.user_metadata as AuthUser || null);
-    });
+  useEffect(() => {
+    localStorage.setItem('crimegpt_language', language);
+  }, [language]);
 
-    return () => subscription.unsubscribe();
+  useEffect(() => {
+    const saved = localStorage.getItem('crimegpt_theme') as 'light' | 'dark';
+    if (saved === 'light' || saved === 'dark') setTheme(saved);
   }, []);
 
-  if (sessionLoading) return <div className="h-screen w-screen flex items-center justify-center text-white" style={{ background: "#060B18" }}>Loading Secure Session...</div>;
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('crimegpt_theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+
+  const fetchProfile = async (session: any) => {
+    try {
+      console.log("Auth successful, fetching profile for:", session.user.id);
+      const { data: profile } = await supabase
+        .from('users')
+        .select('*')
+        .eq('email', session.user.email)
+        .maybeSingle();
+
+      const fetchedName = profile?.full_name || baseMetadata.full_name || baseMetadata.name || session.user.email?.split('@')[0] || 'Investigating Officer';
+      let dbRole = profile?.rank || baseMetadata.role || 'Investigating Officer';
+      if (dbRole === 'investigating_officer') dbRole = 'Investigating Officer';
+      if (dbRole === 'senior_officer') dbRole = 'Senior Officer / Supervisor';
+      if (dbRole === 'legal_officer') dbRole = 'Legal Officer';
+      if (dbRole === 'forensic_expert') dbRole = 'Forensic Expert';
+      if (dbRole === 'administrator') dbRole = 'Administrator';
+      
+      const fullUser = {
+        ...baseMetadata,
+        id: session.user.id,
+        email: session.user.email,
+        name: fetchedName,
+        badgeId: profile?.badge_number || baseMetadata.badge_number || baseMetadata.badgeId || 'GUJ-CYB-000',
+        role: dbRole as UserRole,
+        department: profile?.department || baseMetadata.department || 'Cyber Crime Division',
+        initials: getInitials(fetchedName, session.user.email)
+      };
+      setUser(fullUser as AuthUser);
+    } catch (err) {
+      console.error("Failed to fetch profile:", err);
+      const fallbackName = session.user.email?.split('@')[0] || 'Officer';
+      setUser({
+        id: session.user.id,
+        email: session.user.email,
+        name: fallbackName,
+        badgeId: 'GUJ-CYB-000',
+        role: 'Investigating Officer' as UserRole,
+        department: 'Cyber Crime Division',
+        initials: getInitials(fallbackName, session.user.email)
+      } as AuthUser);
+    } finally {
+      setSessionLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(({ data: { session } }: any) => {
+      if (!mounted) return;
+      if (session) {
+        fetchProfile(session);
+      } else {
+        setSessionLoading(false);
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event: any, session: any) => {
+      if (!mounted) return;
+      if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setSessionLoading(false);
+      } else if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+        // CRITICAL GUARD: If we already have an active session for this exact user ID,
+        // update the token silently in the background WITHOUT triggering loading spinners or route resets!
+        if (userRef.current?.id && session?.user?.id === userRef.current.id) {
+          return; 
+        }
+
+        if (session) {
+          setSessionLoading(true);
+          fetchProfile(session);
+        }
+      }
+      // Explicitly IGNORE 'TOKEN_REFRESHED' to prevent UI reload on tab focus
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  if (sessionLoading) return (
+    <div className="h-screen w-screen flex flex-col gap-4 items-center justify-center text-slate-900 dark:text-white font-['Outfit']" style={{ background: "var(--background)" }}>
+      <Loader2 size={32} className="animate-spin text-blue-600 dark:text-blue-400" />
+      <span className="text-lg">Loading Precinct Command Center...</span>
+    </div>
+  );
 
   return (
-    <AuthCtx.Provider value={{ user, login: setUser, logout: () => supabase.auth.signOut() }}>
-      <style>{STYLES}</style>
-      {user ? (
-        <MainApp user={user} onLogout={() => supabase.auth.signOut()} />
-      ) : authPage === "login" ? (
-        <LoginPage onSwitch={() => setAuthPage("register")} onLogin={setUser} />
-      ) : (
-        <RegisterPage onSwitch={() => setAuthPage("login")} onLogin={setUser} />
-      )}
-    </AuthCtx.Provider>
+    <LanguageContext.Provider value={{ language, setLanguage, t: translations[language] || translations.en }}>
+      <ThemeCtx.Provider value={{ theme, toggleTheme }}>
+        <AuthCtx.Provider value={{ user, login: setUser, logout: () => supabase.auth.signOut() }}>
+          <style>{STYLES}</style>
+          <Toaster position="top-right" richColors />
+          {user ? (
+            <ErrorBoundary>
+              <MainApp user={user} onLogout={() => supabase.auth.signOut()} />
+            </ErrorBoundary>
+          ) : authPage === "login" ? (
+            <LoginPage onSwitch={() => setAuthPage("register")} onLogin={setUser} />
+          ) : (
+            <RegisterPage onSwitch={() => setAuthPage("login")} onLogin={setUser} />
+          )}
+        </AuthCtx.Provider>
+      </ThemeCtx.Provider>
+    </LanguageContext.Provider>
   );
 }

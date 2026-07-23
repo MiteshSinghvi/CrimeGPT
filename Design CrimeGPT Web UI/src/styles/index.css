@@ -1,3 +1,9 @@
 @import './fonts.css';
 @import './tailwind.css';
 @import './theme.css';
+
+@layer base {
+  * {
+    @apply transition-colors duration-200 ease-in-out;
+  }
+}
